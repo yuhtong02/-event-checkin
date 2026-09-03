@@ -345,12 +345,16 @@
     }catch(e){ console.error('saveEntry failed', e); return false; }
   }
   async function toggleArrived(entry){
+    const prevArrived = entry.arrived, prevTs = entry.arrivedTs;
     entry.arrived = !entry.arrived;
     entry.arrivedTs = entry.arrived ? Date.now() : null;
-    await saveEntry(entry);
+    const ok = await saveEntry(entry);
+    if(!ok){ entry.arrived = prevArrived; entry.arrivedTs = prevTs; }
+    return ok;
   }
   async function deleteEntry(id){
-    try{ await window.storage.delete('entry:'+id, true); }catch(e){}
+    try{ await withRetry(()=> window.storage.delete('entry:'+id, true)); return true; }
+    catch(e){ console.error('deleteEntry failed', e); return false; }
   }
 
   function withTimeout(promise, ms){
@@ -868,25 +872,65 @@
     layoutUndoStack = [snapshotLayout(s)];
     layoutUndoIndex = 0;
   }
-  function undoLayout(){
+  async function undoLayout(){
     if(layoutUndoIndex <= 0) return;
+    const s = state.settings;
+    const prevIndex = layoutUndoIndex; // snapshot before the operation, for rollback
+    const prevSnapshot = snapshotLayout(s);
     layoutUndoIndex--;
     const snap = layoutUndoStack[layoutUndoIndex];
-    const s = state.settings;
     s.tables = JSON.parse(JSON.stringify(snap.tables));
     s.landmarks = JSON.parse(JSON.stringify(snap.landmarks));
     render(); // instant visual feedback
-    saveSettings(s); // persist in the background
+    let statusEl = document.getElementById('layoutSaveStatus');
+    if(statusEl) statusEl.textContent = '儲存中...';
+    const ok = await saveSettings(s);
+    if(ok){
+      statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+      if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+    }else{
+      // rollback to exactly how things were before this undo was attempted
+      layoutUndoIndex = prevIndex;
+      s.tables = prevSnapshot.tables;
+      s.landmarks = prevSnapshot.landmarks;
+      render();
+      statusEl = document.getElementById('layoutSaveStatus');
+      if(statusEl){
+        statusEl.innerHTML = '⚠️ 儲存失敗，請重試 <span id="layoutRetryBtn" style="cursor:pointer;text-decoration:underline;">重試</span>';
+        const retryBtn = document.getElementById('layoutRetryBtn');
+        if(retryBtn) retryBtn.onclick = undoLayout;
+      }
+    }
   }
-  function redoLayout(){
+  async function redoLayout(){
     if(layoutUndoIndex >= layoutUndoStack.length-1) return;
+    const s = state.settings;
+    const prevIndex = layoutUndoIndex; // snapshot before the operation, for rollback
+    const prevSnapshot = snapshotLayout(s);
     layoutUndoIndex++;
     const snap = layoutUndoStack[layoutUndoIndex];
-    const s = state.settings;
     s.tables = JSON.parse(JSON.stringify(snap.tables));
     s.landmarks = JSON.parse(JSON.stringify(snap.landmarks));
     render(); // instant visual feedback
-    saveSettings(s); // persist in the background
+    let statusEl = document.getElementById('layoutSaveStatus');
+    if(statusEl) statusEl.textContent = '儲存中...';
+    const ok = await saveSettings(s);
+    if(ok){
+      statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+      if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+    }else{
+      // rollback to exactly how things were before this redo was attempted
+      layoutUndoIndex = prevIndex;
+      s.tables = prevSnapshot.tables;
+      s.landmarks = prevSnapshot.landmarks;
+      render();
+      statusEl = document.getElementById('layoutSaveStatus');
+      if(statusEl){
+        statusEl.innerHTML = '⚠️ 儲存失敗，請重試 <span id="layoutRetryBtn" style="cursor:pointer;text-decoration:underline;">重試</span>';
+        const retryBtn = document.getElementById('layoutRetryBtn');
+        if(retryBtn) retryBtn.onclick = redoLayout;
+      }
+    }
   }
 
   function renderCheckin(c){
@@ -962,7 +1006,12 @@
           const entry = state.entries.find(x=>x.id===btn.dataset.arrive);
           if(!entry) return;
           btn.disabled = true;
-          await toggleArrived(entry);
+          const ok = await toggleArrived(entry);
+          btn.disabled = false;
+          if(!ok){
+            alert(`⚠️ 報到狀態儲存失敗，請檢查網路後重試。「${entry.name}」的報到狀態尚未更新成功。`);
+            return;
+          }
           doSearch();
           const hdr = c.querySelector('.small');
           if(hdr){
@@ -1385,6 +1434,7 @@
   function renderAdminSettings(body){
     const s = state.settings;
     body.innerHTML = `
+      <div class="small" id="settingsSaveStatus" style="min-height:18px;color:var(--red);font-weight:700;"></div>
       <div class="card">
         <h2>活動基本資訊</h2>
         <label>活動名稱</label><input type="text" id="a_name" value="${esc(s.eventName)}">
@@ -1492,11 +1542,44 @@
         <div class="small" style="margin-top:6px;">🏢 = 員工單位　🎫 = 外部貴賓／團體（點 ⇄ 可切換）</div>
       </div>
     `;
+    // Keeps whatever is currently typed in EVERY input on this page synced into `s`, before any
+    // action on this page triggers render(). This page has many independent fields each with
+    // their own "save" button (or none, for the radios) — without this, editing one field and
+    // then clicking an unrelated button (add a department, toggle staff/external, change the
+    // check-in mode radio, etc.) would rebuild the whole page from the old saved values and
+    // silently discard whatever you were still typing elsewhere.
+    function syncBasicInputsToState(){
+      const v = id => { const el = document.getElementById(id); return el ? el.value : null; };
+      if(v('a_name')!=null) s.eventName = v('a_name');
+      if(v('a_date')!=null) s.eventDate = v('a_date');
+      if(v('a_time')!=null) s.eventTime = v('a_time');
+      if(v('a_loc')!=null) s.eventLocation = v('a_loc');
+      if(v('a_pin')!=null) s.adminPin = v('a_pin').trim();
+      if(v('a_ckpin')!=null) s.checkinPin = v('a_ckpin').trim();
+      if(v('a_grouplabel')!=null) s.groupLabel = v('a_grouplabel').trim() || '部門';
+    }
+    // Single choke point for every save on this page: only on success do we show the success
+    // message and render() (safe to do then, since `s` already reflects everything). On failure
+    // we never render — that would rebuild the page from whatever WAS last saved and could make
+    // a person think their change (or someone else's still-unsaved edit elsewhere on the page)
+    // vanished. Instead the failure is reported in place and every input keeps exactly what's
+    // currently in it.
+    async function persistBasic(successMsg){
+      const statusEl = document.getElementById('settingsSaveStatus');
+      if(statusEl) statusEl.textContent = '';
+      const ok = await saveSettings(s);
+      if(ok){
+        state.msg = {type:'ok', text: successMsg};
+        render();
+      }else if(statusEl){
+        statusEl.textContent = '⚠️ 儲存失敗，請檢查網路後再試一次（目前輸入的內容都還在，不用重新打）';
+      }
+      return ok;
+    }
+
     document.getElementById('saveGroupLabel').onclick = async ()=>{
-      s.groupLabel = document.getElementById('a_grouplabel').value.trim() || '部門';
-      await saveSettings(s);
-      state.msg = {type:'ok', text:'已更新欄位名稱'};
-      render();
+      syncBasicInputsToState();
+      await persistBasic('已更新欄位名稱');
     };
     const linkBox = document.getElementById('checkinLinkBox');
     linkBox.value = location.href.split('#')[0] + '#checkin';
@@ -1507,74 +1590,91 @@
       render();
     };
     document.getElementById('saveCkPin').onclick = async ()=>{
-      s.checkinPin = document.getElementById('a_ckpin').value.trim();
-      await saveSettings(s);
-      state.msg = {type:'ok', text: s.checkinPin? '已設定報到台密碼' : '已取消報到台密碼'};
-      render();
+      syncBasicInputsToState();
+      await persistBasic(s.checkinPin? '已設定報到台密碼' : '已取消報到台密碼');
     };
     body.querySelectorAll('input[name="ckmode"]').forEach(radio=>{
       radio.onchange = async ()=>{
+        syncBasicInputsToState();
+        const prevMode = s.checkinMode;
         s.checkinMode = radio.value;
-        await saveSettings(s);
-        state.msg = {type:'ok', text:'已更新報到開放時間設定'};
-        render();
+        const ok = await persistBasic('已更新報到開放時間設定');
+        if(!ok) s.checkinMode = prevMode; // roll back the in-memory change too, so a later unrelated save doesn't silently carry the failed change forward
       };
     });
     body.querySelectorAll('input[name="regmode"]').forEach(radio=>{
       radio.onchange = async ()=>{
+        syncBasicInputsToState();
+        const prevOpen = s.registrationOpen;
         s.registrationOpen = (radio.value === 'open');
-        await saveSettings(s);
-        state.msg = {type:'ok', text: s.registrationOpen ? '已開放報名' : '已停止報名'};
-        render();
+        const ok = await persistBasic(s.registrationOpen ? '已開放報名' : '已停止報名');
+        if(!ok) s.registrationOpen = prevOpen;
       };
     });
     document.getElementById('savePin').onclick = async ()=>{
-      s.adminPin = document.getElementById('a_pin').value.trim();
-      await saveSettings(s);
-      state.msg = {type:'ok', text: s.adminPin? '已設定密碼' : '已取消密碼保護'};
-      render();
+      syncBasicInputsToState();
+      await persistBasic(s.adminPin? '已設定密碼' : '已取消密碼保護');
     };
     document.getElementById('saveBasic').onclick = async ()=>{
-      s.eventName = document.getElementById('a_name').value;
-      s.eventDate = document.getElementById('a_date').value;
-      s.eventTime = document.getElementById('a_time').value;
-      s.eventLocation = document.getElementById('a_loc').value;
-      await saveSettings(s);
-      state.msg = {type:'ok', text:'已儲存'};
-      render();
+      syncBasicInputsToState();
+      await persistBasic('已儲存');
     };
     document.getElementById('addDept').onclick = async ()=>{
+      syncBasicInputsToState();
       const v = document.getElementById('deptInput').value.trim();
       if(!v) return;
       if(!s.staffDepartments) s.staffDepartments = [];
-      if(!s.departments.includes(v)) s.departments.push(v);
+      const wasNew = !s.departments.includes(v);
+      if(wasNew) s.departments.push(v);
       const wantStaff = document.getElementById('deptIsStaff').checked;
-      if(wantStaff && !s.staffDepartments.includes(v)) s.staffDepartments.push(v);
-      await saveSettings(s);
-      render();
+      const staffWasAdded = wantStaff && !s.staffDepartments.includes(v);
+      if(staffWasAdded) s.staffDepartments.push(v);
+      const ok = await persistBasic(`已新增「${v}」`);
+      if(!ok){
+        // roll back this specific addition so a later unrelated save on this page doesn't
+        // silently carry forward a department that was never actually confirmed saved
+        if(wasNew) s.departments = s.departments.filter(d=>d!==v);
+        if(staffWasAdded) s.staffDepartments = s.staffDepartments.filter(d=>d!==v);
+      }
     };
     body.querySelectorAll('.x').forEach(el=>{
       el.onclick = async ()=>{
-        s.departments = s.departments.filter(d=>d!==el.dataset.d);
-        if(s.staffDepartments) s.staffDepartments = s.staffDepartments.filter(d=>d!==el.dataset.d);
-        await saveSettings(s);
-        render();
+        syncBasicInputsToState();
+        const d = el.dataset.d;
+        const removed = s.departments.filter(x=>x===d);
+        const removedStaff = (s.staffDepartments||[]).filter(x=>x===d);
+        s.departments = s.departments.filter(x=>x!==d);
+        if(s.staffDepartments) s.staffDepartments = s.staffDepartments.filter(x=>x!==d);
+        const ok = await persistBasic(`已移除「${d}」`);
+        if(!ok){
+          s.departments = s.departments.concat(removed);
+          if(!s.staffDepartments) s.staffDepartments = [];
+          s.staffDepartments = s.staffDepartments.concat(removedStaff);
+        }
       };
     });
     body.querySelectorAll('[data-toggle-staff]').forEach(el=>{
       el.onclick = async ()=>{
+        syncBasicInputsToState();
         const d = el.dataset.toggleStaff;
         if(!s.staffDepartments) s.staffDepartments = [];
-        if(s.staffDepartments.includes(d)) s.staffDepartments = s.staffDepartments.filter(x=>x!==d);
+        const wasStaff = s.staffDepartments.includes(d);
+        if(wasStaff) s.staffDepartments = s.staffDepartments.filter(x=>x!==d);
         else s.staffDepartments.push(d);
-        await saveSettings(s);
-        render();
+        const ok = await persistBasic(wasStaff ? `「${d}」已改為外部` : `「${d}」已改為員工`);
+        if(!ok){
+          // roll back
+          if(!s.staffDepartments) s.staffDepartments = [];
+          if(wasStaff && !s.staffDepartments.includes(d)) s.staffDepartments.push(d);
+          else if(!wasStaff) s.staffDepartments = s.staffDepartments.filter(x=>x!==d);
+        }
       };
     });
   }
 
   function renderAdminTables(body){
     const s = state.settings;
+    const originalNos = s.tables.map(t=>String(t.no)); // snapshot at render time, to detect renames
     body.innerHTML = `
       <div class="card">
         <h2>桌次設定</h2>
@@ -1591,33 +1691,88 @@
               </tr>`).join('')}
           </tbody>
         </table>
-        <div style="margin-top:12px;display:flex;gap:8px;">
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
           <button class="btn btn-ghost" id="addTable">+ 新增一桌</button>
           <button class="btn btn-primary" id="saveTables">儲存桌次設定</button>
+          <span class="small" id="tablesSaveStatus"></span>
         </div>
       </div>
     `;
+
+    // Reads whatever is CURRENTLY in the input boxes (including edits the person hasn't
+    // pressed "儲存" for yet) and writes it into s.tables, in place, by array position.
+    // This must run before any operation that reads/mutates s.tables (add, delete, save) —
+    // otherwise an in-progress-but-unsaved edit gets silently discarded because the operation
+    // was still working off the older in-memory copy. Also detects table-number renames (e.g.
+    // "5" -> "A桌") and migrates any registrants already assigned to that table number, so they
+    // follow the rename instead of being silently orphaned.
+    // Keyed by entry.id (not a plain array) so re-running sync before a save has actually
+    // succeeded — e.g. add a table, then also click save — never queues the same entry twice.
+    const migratedEntries = new Map();
+    function syncTableInputsToState(){
+      body.querySelectorAll('#tableTbl input').forEach(inp=>{
+        const i = parseInt(inp.dataset.i), f = inp.dataset.f;
+        if(!s.tables[i]) return;
+        const newVal = f==='capacity' ? (parseInt(inp.value)||0) : inp.value.trim();
+        if(f==='no' && originalNos[i]!=null && newVal!=='' && String(newVal)!==originalNos[i]){
+          const oldNo = originalNos[i];
+          currentEntries().filter(e=>String(e.table)===oldNo).forEach(e=>{
+            e.table = String(newVal);
+            migratedEntries.set(e.id, e);
+          });
+        }
+        s.tables[i][f] = newVal;
+      });
+    }
+
+    async function persistTables(successMsg){
+      const statusEl = document.getElementById('tablesSaveStatus');
+      if(statusEl) statusEl.textContent = '儲存中...';
+      const ok = await saveSettings(s);
+      if(!ok){
+        // don't render (would wipe out whatever the person is still looking at) — just report
+        // the failure in place. The in-memory s.tables already has their edits either way,
+        // so nothing is lost; pressing "儲存桌次設定" again will retry with the same data.
+        if(statusEl) statusEl.textContent = '⚠️ 儲存失敗，請檢查網路後再按一次「儲存桌次設定」重試';
+        return;
+      }
+      // table settings saved — now carry forward any table-rename migrations to the affected
+      // registrants too, and actually wait to confirm every one of them succeeded before
+      // calling this fully done, instead of firing them off and hoping.
+      const toMigrate = [...migratedEntries.values()];
+      if(toMigrate.length > 0){
+        if(statusEl) statusEl.textContent = '同步人員桌號中...';
+        const results = await Promise.all(toMigrate.map(e=> saveEntry(e)));
+        toMigrate.forEach((e,idx)=>{ if(results[idx]===true) migratedEntries.delete(e.id); });
+        if(!results.every(r=>r===true)){
+          // the table settings themselves DID save — only some people's table assignments
+          // failed to follow the rename. Say so plainly instead of pretending it all worked;
+          // the failed ones stay queued so the next successful save retries them.
+          const failedCount = results.filter(r=>r!==true).length;
+          if(statusEl) statusEl.textContent = `⚠️ 桌次設定已儲存，但有 ${failedCount} 位人員的桌號同步失敗，請再按一次「儲存桌次設定」重試`;
+          return;
+        }
+      }
+      state.msg = {type:'ok', text: successMsg};
+      render(); // safe to rebuild now — s.tables (and any migrated entries) are all confirmed saved
+    }
+
     document.getElementById('addTable').onclick = async ()=>{
+      syncTableInputsToState(); // keep any unsaved edits in the OTHER rows before adding
       const maxNo = s.tables.reduce((m,t)=>Math.max(m, parseInt(t.no)||0), 0);
       s.tables.push({no:maxNo+1, name:'', capacity:10, x:50, y:50});
-      await saveSettings(s);
-      render();
+      await persistTables('已新增一桌');
     };
     body.querySelectorAll('[data-del]').forEach(btn=>{
       btn.onclick = async ()=>{
+        syncTableInputsToState(); // keep any unsaved edits in the OTHER rows before deleting
         s.tables.splice(parseInt(btn.dataset.del),1);
-        await saveSettings(s);
-        render();
+        await persistTables('已刪除該桌');
       };
     });
     document.getElementById('saveTables').onclick = async ()=>{
-      body.querySelectorAll('#tableTbl input').forEach(inp=>{
-        const i = parseInt(inp.dataset.i), f = inp.dataset.f;
-        s.tables[i][f] = f==='capacity' ? (parseInt(inp.value)||0) : inp.value;
-      });
-      await saveSettings(s);
-      state.msg = {type:'ok', text:'已儲存桌次設定'};
-      render();
+      syncTableInputsToState();
+      await persistTables('已儲存桌次設定');
     };
   }
 
@@ -1671,12 +1826,31 @@
     if(s.layoutMode==='custom'){
       fitScaleToWrapper(document.getElementById('layoutCanvas'), document.getElementById('layoutCanvasWrap'), 760);
     }
-    document.getElementById('toggleLayoutMode').onclick = async ()=>{
+    async function doToggleLayoutMode(){
+      const prevMode = s.layoutMode; // snapshot before the operation, for rollback
+      const prevTables = JSON.parse(JSON.stringify(s.tables));
       s.layoutMode = s.layoutMode==='custom' ? 'auto' : 'custom';
       s.tables.forEach(t=>{ if(t.x==null||t.y==null){ t.x = (TABLE_XY[t.no]||[50,50])[0]; t.y = (TABLE_XY[t.no]||[50,50])[1]; } });
-      await saveSettings(s);
-      render();
-    };
+      let statusEl = document.getElementById('layoutSaveStatus');
+      if(statusEl) statusEl.textContent = '儲存中...';
+      const ok = await saveSettings(s);
+      if(ok){
+        render();
+        statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+        if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+      }else{
+        s.layoutMode = prevMode; // rollback to exactly how things were before this was attempted
+        s.tables = prevTables;
+        render();
+        statusEl = document.getElementById('layoutSaveStatus');
+        if(statusEl){
+          statusEl.innerHTML = '⚠️ 儲存失敗，請重試 <span id="layoutRetryBtn" style="cursor:pointer;text-decoration:underline;">重試</span>';
+          const retryBtn = document.getElementById('layoutRetryBtn');
+          if(retryBtn) retryBtn.onclick = doToggleLayoutMode;
+        }
+      }
+    }
+    document.getElementById('toggleLayoutMode').onclick = doToggleLayoutMode;
     if(s.layoutMode!=='custom') return;
     if(layoutUndoStack.length===0) resetLayoutUndoStack(s);
     const undoBtn = document.getElementById('undoLayoutBtn');
@@ -1684,12 +1858,29 @@
     if(undoBtn){ undoBtn.disabled = layoutUndoIndex<=0; undoBtn.onclick = undoLayout; }
     if(redoBtn){ redoBtn.disabled = layoutUndoIndex>=layoutUndoStack.length-1; redoBtn.onclick = redoLayout; }
 
-    document.getElementById('resetLayout').onclick = async ()=>{
+    async function doResetLayout(){
+      const prevTables = JSON.parse(JSON.stringify(s.tables)); // snapshot before the operation, for rollback
       s.tables.forEach(t=>{ const xy = TABLE_XY[t.no]||[50,50]; t.x = xy[0]; t.y = xy[1]; });
-      await saveSettings(s);
-      pushLayoutUndo(s);
-      render();
-    };
+      let statusEl = document.getElementById('layoutSaveStatus');
+      if(statusEl) statusEl.textContent = '儲存中...';
+      const ok = await saveSettings(s);
+      if(ok){
+        pushLayoutUndo(s);
+        render();
+        statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+        if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+      }else{
+        s.tables = prevTables; // rollback to exactly how things were before this reset was attempted
+        render();
+        statusEl = document.getElementById('layoutSaveStatus');
+        if(statusEl){
+          statusEl.innerHTML = '⚠️ 儲存失敗，請重試 <span id="layoutRetryBtn" style="cursor:pointer;text-decoration:underline;">重試</span>';
+          const retryBtn = document.getElementById('layoutRetryBtn');
+          if(retryBtn) retryBtn.onclick = doResetLayout;
+        }
+      }
+    }
+    document.getElementById('resetLayout').onclick = doResetLayout;
 
     async function addLandmark(label, type){
       if(!label && type!=='pillar') return;
@@ -1698,10 +1889,26 @@
       const y = 6;
       const lm = { id: uid(), label: label||'', x, y };
       if(type) lm.type = type;
+      const prevLandmarks = JSON.parse(JSON.stringify(s.landmarks)); // snapshot before the operation, for rollback
       s.landmarks.push(lm);
-      await saveSettings(s);
-      pushLayoutUndo(s);
-      render();
+      let statusEl = document.getElementById('layoutSaveStatus');
+      if(statusEl) statusEl.textContent = '儲存中...';
+      const ok = await saveSettings(s);
+      if(ok){
+        pushLayoutUndo(s);
+        render();
+        statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+        if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+      }else{
+        s.landmarks = prevLandmarks; // rollback to exactly how things were before this add was attempted
+        render();
+        statusEl = document.getElementById('layoutSaveStatus');
+        if(statusEl){
+          statusEl.innerHTML = '⚠️ 儲存失敗，請重試 <span id="layoutRetryBtn" style="cursor:pointer;text-decoration:underline;">重試</span>';
+          const retryBtn = document.getElementById('layoutRetryBtn');
+          if(retryBtn) retryBtn.onclick = ()=> addLandmark(label, type);
+        }
+      }
     }
     body.querySelectorAll('[data-quick-lm]').forEach(btn=>{
       btn.onclick = ()=> addLandmark(btn.dataset.quickLm);
@@ -1793,10 +2000,24 @@
       wrap.addEventListener('pointercancel', onUp);
       wrap.querySelector('[data-del-lm]').onclick = async (ev)=>{
         ev.stopPropagation();
+        const prevLandmarks = JSON.parse(JSON.stringify(s.landmarks)); // snapshot before the operation, for rollback
         s.landmarks = s.landmarks.filter(x=>x.id!==lm.id);
-        await saveSettings(s);
-        pushLayoutUndo(s);
-        render();
+        let statusEl = document.getElementById('layoutSaveStatus');
+        if(statusEl) statusEl.textContent = '儲存中...';
+        const ok = await saveSettings(s);
+        if(ok){
+          pushLayoutUndo(s);
+          render();
+          statusEl = document.getElementById('layoutSaveStatus'); // render() rebuilt the DOM — refetch
+          if(statusEl){ statusEl.textContent = '✅ 已儲存'; setTimeout(()=>{ if(statusEl) statusEl.textContent=''; }, 1500); }
+        }else{
+          s.landmarks = prevLandmarks; // rollback to exactly how things were before this delete was attempted
+          render();
+          statusEl = document.getElementById('layoutSaveStatus');
+          if(statusEl){
+            statusEl.textContent = '⚠️ 儲存失敗，請重試';
+          }
+        }
       };
     });
 
@@ -1967,7 +2188,7 @@
           <span class="small" id="rosterFileName" style="margin-left:8px;"></span>
         </div>
         <textarea id="rosterInput" placeholder="陳大文,鈺通營造&#10;林小美,鈺通飯店&#10;王小明" style="width:100%;height:120px;font-size:13px;padding:8px;
-          border:1.5px solid var(--line);border-radius:8px;margin-top:10px;"></textarea>
+          border:1.5px solid var(--line);border-radius:8px;margin-top:10px;">${esc(state._rosterDraftText||'')}</textarea>
         <div style="margin-top:10px;display:flex;gap:8px;">
           <button class="btn btn-primary" id="rosterImport">＋ 加入名單</button>
           <button class="btn btn-ghost" id="rosterClear">🗑️ 清空整份公司名單</button>
@@ -2023,20 +2244,38 @@
       statusEl.textContent = '儲存中...';
       const ok = await saveSettings(s);
       statusEl.textContent = ok ? `已新增 ${added} 人（重複的姓名已自動跳過）` : '⚠️ 儲存失敗，請再試一次';
-      if(ok) render();
+      if(ok){ state._rosterDraftText = ''; render(); } // imported successfully — draft is now redundant
     };
     document.getElementById('rosterClear').onclick = async ()=>{
       if(!confirm('確定要清空整份公司名單嗎？此動作無法復原（但不會影響已送出的報名資料）。')) return;
+      state._rosterDraftText = document.getElementById('rosterInput').value; // keep whatever they'd pasted but not imported yet
+      const snapshot = s.staffRoster;
       s.staffRoster = [];
-      await saveSettings(s);
-      render();
+      const statusEl = document.getElementById('rosterStatus');
+      if(statusEl) statusEl.textContent = '清空中...';
+      const ok = await saveSettings(s);
+      if(ok){
+        render();
+      }else{
+        s.staffRoster = snapshot; // roll back — the clear never actually took effect on the server
+        if(statusEl) statusEl.textContent = '⚠️ 清空失敗，請檢查網路後再試一次（名單並未被清空）';
+      }
     };
     body.querySelectorAll('[data-del-roster]').forEach(btn=>{
       btn.onclick = async ()=>{
+        state._rosterDraftText = document.getElementById('rosterInput').value; // keep whatever they'd pasted but not imported yet
         const i = parseInt(btn.dataset.delRoster);
+        const removedEntry = s.staffRoster[i];
         s.staffRoster.splice(i,1);
-        await saveSettings(s);
-        render();
+        const statusEl = document.getElementById('rosterStatus');
+        if(statusEl) statusEl.textContent = '刪除中...';
+        const ok = await saveSettings(s);
+        if(ok){
+          render();
+        }else{
+          if(removedEntry) s.staffRoster.splice(i,0,removedEntry); // roll back — put it back where it was
+          if(statusEl) statusEl.textContent = '⚠️ 刪除失敗，請檢查網路後再試一次（該筆資料並未被刪除）';
+        }
       };
     });
   }
@@ -2100,10 +2339,20 @@
       sel.onchange = async ()=>{
         const id = sel.closest('tr').dataset.id;
         const entry = state.entries.find(x=>x.id===id);
-        entry.table = sel.value;
-        saveEntry(entry); // fire in background, don't make them wait on it
-        if(sel.value){
-          const tbl = s.tables.find(t=>String(t.no)===String(sel.value));
+        const oldTable = entry.table;
+        const newTable = sel.value;
+        entry.table = newTable;
+        sel.disabled = true;
+        const ok = await saveEntry(entry);
+        sel.disabled = false;
+        if(!ok){
+          entry.table = oldTable; // roll back the in-memory change
+          sel.value = oldTable; // and what's actually shown in the dropdown
+          alert(`⚠️ 桌號儲存失敗，請檢查網路後重試。「${entry.name}」目前仍維持原本的桌號設定。`);
+          return;
+        }
+        if(newTable){
+          const tbl = s.tables.find(t=>String(t.no)===String(newTable));
           if(tbl){
             const occ = tableOccupancy(tbl.no);
             if(occ > tbl.capacity){
@@ -2117,13 +2366,23 @@
       btn.onclick = ()=> openEditEntryModal(btn.dataset.editEntry, body);
     });
     body.querySelectorAll('[data-del-entry]').forEach(btn=>{
-      btn.onclick = ()=>{
+      btn.onclick = async ()=>{
         const id = btn.dataset.delEntry;
         if(!confirm('確定要刪除這筆資料嗎？')) return;
-        // optimistic: remove from screen immediately, delete on the server in the background
-        state.entries = state.entries.filter(e=>e.id!==id);
-        render();
-        deleteEntry(id);
+        btn.disabled = true;
+        btn.textContent = '刪除中...';
+        const ok = await deleteEntry(id);
+        if(ok){
+          // only remove from the visible list once the deletion is actually confirmed —
+          // removing it first and deleting in the background could leave the data sitting
+          // untouched on the server while the screen claims it's gone.
+          state.entries = state.entries.filter(e=>e.id!==id);
+          render();
+        }else{
+          btn.disabled = false;
+          btn.textContent = '刪除';
+          alert('⚠️ 刪除失敗，請檢查網路後再試一次。這筆資料還在，並未被刪除。');
+        }
       };
     });
     const newScrollEl = document.getElementById('adminListScroll');
@@ -2251,9 +2510,22 @@
         if(!ok2) return;
         const statusEl = document.getElementById('histDelete');
         statusEl.disabled = true; statusEl.textContent = '刪除中...';
-        for(const e of list){ await deleteEntry(e.id); }
-        state.entries = state.entries.filter(e => (e.eventKey||curKey) !== state.historySelected);
-        state.msg = {type:'ok', text:`已刪除「${label}」共 ${list.length} 筆資料`};
+        // delete one at a time and track exactly which ones actually succeeded — only those
+        // get removed from the local list, so a partial failure never gets reported as complete.
+        const succeededIds = [];
+        const failedNames = [];
+        for(const e of list){
+          const ok = await deleteEntry(e.id);
+          if(ok) succeededIds.push(e.id);
+          else failedNames.push(e.name);
+        }
+        const succeededSet = new Set(succeededIds);
+        state.entries = state.entries.filter(e => !succeededSet.has(e.id));
+        if(failedNames.length === 0){
+          state.msg = {type:'ok', text:`已刪除「${label}」共 ${list.length} 筆資料`};
+        }else{
+          state.msg = {type:'err', text:`已刪除 ${succeededIds.length} 筆，但有 ${failedNames.length} 筆刪除失敗（請檢查網路後對這幾位再刪一次：${failedNames.join('、')}）`};
+        }
         render();
       };
     };
