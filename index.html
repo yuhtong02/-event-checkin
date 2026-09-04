@@ -290,6 +290,8 @@
     tab: 'register',
     adminSub: 'settings',
     settings: null,
+    settingsLoadFailed: false, // true when the cloud settings couldn't be fetched — show error, never fake defaults
+    settingsLoaded: false,
     entries: [],
     loading: true,
     msg: null,
@@ -328,10 +330,14 @@
   };
 
   const DEFAULT_SETTINGS = {
-    eventName: '115年春酒晚宴',
-    eventDate: '115/03/14',
-    eventTime: '晚上6點30分',
-    eventLocation: '鈺通大飯店 鈺荷園',
+    // DATA-SAFETY: these defaults are only ever an in-memory fallback when cloud settings can't
+    // be loaded. They MUST NOT contain any real/old activity data (name, date, time, location,
+    // PIN) — otherwise a failed load would show stale data that looks like the real thing.
+    // They are never written back to the cloud (init does not saveSettings on a failed load).
+    eventName: '',
+    eventDate: '',
+    eventTime: '',
+    eventLocation: '',
     departments: ['鈺通營造','鈺通飯店','貴賓','慈仁慈善會','棒球隊','警察局','記者','東區團委會','其他'],
     staffDepartments: ['鈺通營造','鈺通飯店'],
     groupLabel: '部門',
@@ -449,9 +455,16 @@
     try{
       let s = await withTimeout(loadSettings(), 8000);
       if(!s){
+        // DATA-SAFETY: never write DEFAULT_SETTINGS back to the cloud here. A null return
+        // usually means a transient load failure (request timed out / server hiccup), NOT that
+        // settings have never existed — writing defaults would silently overwrite the real cloud
+        // settings (event name/date, admin & check-in PINs, registration window, tables, layout…).
+        // So we use defaults ONLY as an in-memory fallback for rendering, and warn the user that
+        // real settings couldn't be confirmed. Settings are persisted exclusively by an explicit
+        // "save" action in the admin UI — never by merely opening/refreshing/switching tabs.
         s = DEFAULT_SETTINGS;
-        const ok = await withTimeout(saveSettings(s), 8000);
-        if(!ok) state.storageWarning = true;
+        state.storageWarning = true;
+        state.settingsLoadFailed = true; // real cloud settings couldn't be fetched — render an error, not fake data
       }
       state.settings = s;
       state.settingsLoaded = true;
@@ -680,6 +693,15 @@
         return;
       }
 
+      if(state.settingsLoadFailed){
+        // never show the check-in screen against neutral/fake defaults on a failed load
+        c.innerHTML = `<div class="card" style="max-width:380px;margin:20px auto;text-align:center;">
+          <h2>活動資料載入失敗</h2>
+          <div class="small">活動資料載入失敗，請稍後重新整理頁面再試。</div>
+        </div>`;
+        return;
+      }
+
       if(!isCheckinOpenNow()){
         c.innerHTML = `
           <div class="card" style="max-width:380px;margin:20px auto;text-align:center;">
@@ -737,6 +759,22 @@
       // a fillable form that then snaps to "已截止" / "尚未開放" once the real dates load
       if(!state.settingsLoaded){
         c.innerHTML = warnHtml + '<div class="empty-state">載入中...</div>';
+        return;
+      }
+
+      // If the real cloud settings could not be fetched, show a clear error instead of rendering
+      // a form backed by neutral defaults — never let a failed load look like real activity data.
+      if(state.settingsLoadFailed){
+        c.innerHTML = `
+          <div class="card" style="max-width:380px;margin:20px auto;text-align:center;">
+            <h2>活動資料載入失敗</h2>
+            <div class="small">活動資料載入失敗，請稍後重新整理頁面再試。若持續發生，請洽人事確認網路或系統狀態。</div>
+            <div style="text-align:center;margin-top:16px;">
+              <span id="staffLink" style="cursor:pointer;color:#C9B7C2;font-size:11.5px;text-decoration:underline;">人事後台入口</span>
+            </div>
+          </div>`;
+        const sl = document.getElementById('staffLink');
+        if(sl) sl.onclick = openStaffGate;
         return;
       }
 
@@ -850,11 +888,16 @@
     // saved a new password moments earlier: this fetch could occasionally still see the
     // not-yet-settled old value and, by replacing state.settings wholesale, made the newly
     // set password look like it had "disappeared" again.
-    if(freshSettings && !state.settingsLoaded){
-      // settings had never loaded at all yet (e.g. gate clicked instantly on page load) —
-      // safe to adopt fully since there's nothing newer locally that could be clobbered.
-      state.settings = freshSettings;
-      state.settingsLoaded = true;
+    if(freshSettings){
+      // A fresh read succeeded. Adopt it (safely) and clear any earlier load-failure state:
+      // if settings never loaded, OR the previous load failed (state.settings is only neutral
+      // defaults at that point — nothing newer locally to clobber), take the real data. When the
+      // previous load succeeded we leave state.settings alone to avoid racing a just-saved value.
+      if(!state.settingsLoaded || state.settingsLoadFailed){
+        state.settings = freshSettings;
+        state.settingsLoaded = true;
+      }
+      state.settingsLoadFailed = false;
     }
     const pin = (freshSettings && freshSettings.adminPin) || (state.settings && state.settings.adminPin) || '';
     const overlay = document.createElement('div');
