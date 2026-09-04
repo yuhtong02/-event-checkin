@@ -81,6 +81,14 @@
   .occ-over{color:var(--red) !important;font-weight:700;}
   .tbl-overcap{color:var(--red) !important;font-weight:600;}
   .empty-state{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:13.5px;}
+  /* ── skeleton loading (homepage form while settings load) ── */
+  .skel{background:linear-gradient(90deg,#E9E0E6 25%,#F5EFF2 37%,#E9E0E6 63%);background-size:400% 100%;
+        animation:skelShimmer 1.4s ease infinite;border-radius:6px;color:transparent;pointer-events:none;}
+  .skel-title{display:inline-block;width:110px;height:16px;}
+  .skel-label{display:block;width:64px;height:11px;margin:10px 0 4px;}
+  .skel-field{display:block;width:100%;height:40px;border-radius:8px;}
+  .skel-btn{display:block;width:132px;height:40px;border-radius:8px;}
+  @keyframes skelShimmer{0%{background-position:100% 0;}100%{background-position:-100% 0;}}
   .grid-tables{display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:12px;}
   .table-circle{width:84px;min-height:118px;background:#fff;border:2px solid var(--line);border-radius:8px;padding:14px 6px;text-align:center;
                 cursor:pointer;transition:.15s;}
@@ -105,14 +113,15 @@
   .table-index-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 16px;
                      margin-top:18px;padding-top:14px;border-top:2px solid var(--line);}
   .ti-item{font-size:12.5px;font-weight:700;color:var(--plum-dark);}
-  .table-roster-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;
+  .table-roster-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;
                       margin-top:14px;}
   .tr-item{background:#FBF5F8;border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
   .tr-head{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;font-weight:800;
            color:var(--plum-dark);margin-bottom:6px;border-bottom:1px dashed var(--line);padding-bottom:4px;}
   .tr-cap{font-size:12px;font-weight:700;color:var(--plum);white-space:nowrap;}
-  .tr-guest{font-size:12.5px;color:var(--ink);padding:2px 0;}
-  .tr-fam{font-size:11px;color:var(--ink-soft);padding-left:10px;}
+  .tr-names{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:12.5px;line-height:1.35;min-height:36px;}
+  .tr-name-item{font-size:12.5px;color:var(--ink);white-space:nowrap;}
+  .roster-footnote{text-align:center;font-size:10px;color:var(--ink-soft);margin-top:14px;}
   .tr-names.empty{color:#C9B7C2;font-style:italic;font-size:12px;}
   .roster-poster-title{font-size:17px;font-weight:800;color:var(--plum);margin-top:8px;text-align:center;}
   .landmark-del{cursor:pointer;color:var(--red);font-weight:800;margin-left:6px;}
@@ -298,6 +307,7 @@
     settingsLoadFailed: false, // true when the cloud settings couldn't be fetched — show error, never fake defaults
     settingsLoaded: false,
     entries: [],
+    entriesLoaded: false, // true once entries have been fetched successfully at least once
     loading: true,
     msg: null,
     frontDeskMode: (typeof location !== 'undefined' && (
@@ -445,6 +455,7 @@
     state.settings = DEFAULT_SETTINGS;
     state.settingsLoaded = false; // real settings not confirmed yet — don't show a specific event name until they are
     state.entries = [];
+    state.entriesLoaded = false;
     state.loading = false;
     render(); // show the form immediately, don't make people wait on a spinner
 
@@ -498,10 +509,43 @@
     });
   }
 
+  // Cheap field-wise equality on the entry fields that drive any on-screen list/counts.
+  // Used to skip a full re-render when a background refresh returns data identical to what's
+  // already displayed — the biggest source of wasteful admin-list rebuilds on every tick.
+  function entriesEqual(a, b){
+    if(a.length !== b.length) return false;
+    for(let i=0;i<a.length;i++){
+      const x=a[i], y=b[i];
+      if(x.id!==y.id || x.name!==y.name || x.dept!==y.dept || x.status!==y.status ||
+         x.table!==y.table || x.famCount!==y.famCount || x.famNames!==y.famNames ||
+         x.meatCount!==y.meatCount || x.vegCount!==y.vegCount || x.note!==y.note ||
+         x.arrived!==y.arrived || x.ts!==y.ts) return false;
+    }
+    return true;
+  }
+
+  // Shared, deduped entries fetch — guarantees only ONE loadEntries() request is ever in flight,
+  // so rapid tab/subtab switches (or an auto-refresh overlapping a manual refresh) can't fire
+  // multiple overlapping requests. Sets entriesLoaded once data has been fetched successfully;
+  // a failed fetch leaves state.entries (and entriesLoaded) untouched — no data is cleared.
+  let entriesFetchInFlight = null;
+  async function fetchEntries(){
+    if(entriesFetchInFlight) return entriesFetchInFlight; // reuse the in-flight request
+    entriesFetchInFlight = (async ()=>{
+      const fresh = await withTimeout(loadEntries(), 8000);
+      if(fresh){ state.entries = fresh; state.entriesLoaded = true; }
+      return fresh;
+    })().finally(()=>{ entriesFetchInFlight = null; });
+    return entriesFetchInFlight;
+  }
+
   async function refreshEntries(){
-    state.entries = await withTimeout(loadEntries(), 6000) || state.entries;
+    const prev = state.entries;
+    await fetchEntries(); // stale-while-revalidate: never blocks, never clears existing entries
     state.lastAdminRefresh = Date.now();
-    render();
+    // only rebuild the view when the data actually changed — otherwise this render() is pure
+    // waste (recreates the whole list for zero change).
+    if(!entriesEqual(prev, state.entries)) render();
   }
   async function refreshAll(){
     state.settings = await withTimeout(loadSettings(), 6000) || state.settings;
@@ -755,9 +799,10 @@
       </div>` : '';
 
       // don't show the form until settings are confirmed — avoids briefly showing
-      // a fillable form that then snaps to "已截止" / "尚未開放" once the real dates load
+      // a fillable form that then snaps to "已截止" / "尚未開放" once the real dates load.
+      // While waiting, show a skeleton of the form fields instead of a bare "載入中..." line.
       if(!state.settingsLoaded){
-        c.innerHTML = warnHtml + '<div class="empty-state">載入中...</div>';
+        c.innerHTML = warnHtml + registerSkeletonHtml();
         return;
       }
 
@@ -865,7 +910,11 @@
       if(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return;
       // only these two views show live counts/rows worth refreshing automatically
       if(state.adminSub !== 'list' && state.adminSub !== 'stats') return;
-      state.entries = await withTimeout(loadEntries(), 8000) || state.entries;
+      const prev = state.entries;
+      await fetchEntries(); // deduped — shares the single in-flight request with manual refreshes
+      // skip the full re-render when nothing changed — rebuilding the list/stats every 6s for
+      // identical data is the main avoidable cost in the admin view.
+      if(entriesEqual(prev, state.entries)) return;
       state.lastAdminRefresh = Date.now();
       if(state.tab==='admin') render();
     }, 6000);
@@ -939,6 +988,31 @@
   }
 
   // ---------- register tab ----------
+  // Skeleton placeholder shown on the homepage while settings load — mirrors the real
+  // registration form's fields so the page looks structured (not blank) during the API call.
+  function registerSkeletonHtml(){
+    return `
+      <div class="card" aria-hidden="true">
+        <h2><span class="skel skel-title"></span></h2>
+        <label><span class="skel skel-label"></span></label>
+        <div class="skel skel-field"></div>
+        <label><span class="skel skel-label"></span></label>
+        <div class="skel skel-field"></div>
+        <label><span class="skel skel-label"></span></label>
+        <div class="skel skel-field"></div>
+        <label><span class="skel skel-label"></span></label>
+        <div class="skel skel-field"></div>
+        <div class="skel skel-label" style="margin-top:10px;"></div>
+        <div style="display:flex;gap:10px;">
+          <div class="skel skel-field" style="flex:1;"></div>
+          <div class="skel skel-field" style="flex:1;"></div>
+        </div>
+        <label><span class="skel skel-label"></span></label>
+        <div class="skel skel-field"></div>
+        <div style="margin-top:14px;"><div class="skel skel-btn"></div></div>
+      </div>`;
+  }
+
   function renderRegister(c){
     const depts = state.settings.departments;
     c.innerHTML = `
@@ -1360,10 +1434,11 @@
       const guests = byTable[String(t.no)] || [];
       const occ = tableOccupancy(t.no); // already 出席-only, via personTotal()
       const namesHtml = guests.length
-        ? guests.map(g=>{
-            const famLine = g.famNames ? `<div class="tr-fam">攜眷：${esc(g.famNames)}</div>` : '';
-            return `<div class="tr-guest">${esc(g.name)}${famLine}</div>`;
-          }).join('')
+        ? `<div class="tr-names">${guests.map(g=>{
+            const n = personTotal(g) || 1;
+            const label = n > 1 ? esc(g.name) + ' (' + n + ')' : esc(g.name);
+            return `<span class="tr-name-item">${label}</span>`;
+          }).join('')}</div>`
         : `<div class="tr-names empty">尚未安排人員</div>`;
       return `<div class="tr-item">
         <div class="tr-head"><span>${esc(t.no)}桌${t.name?('｜'+esc(t.name)):''}</span><span class="tr-cap">${occ} / ${esc(t.capacity)}</span></div>
@@ -1380,6 +1455,7 @@
         <div class="table-roster-list">
           ${cardsHtml}
         </div>
+        <div class="roster-footnote">※ 姓名後方 (數字) 為該報名人含本人之總人數，例如：王小明 (3) 表示共 3 位。</div>
       </div>`;
   }
 
@@ -2926,7 +3002,10 @@
           </tbody>
         </table>
         </div>
-        ${list.length===0?'<div class="empty-state">本次活動目前尚無報名資料</div>':''}
+        ${list.length===0
+          ? (!state.entriesLoaded ? '<div class="empty-state">正在載入名單…</div>'
+                                  : '<div class="empty-state">本次活動目前尚無報名資料</div>')
+          : ''}
       </div>
       <div id="editModalHost"></div>
     `;
