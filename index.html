@@ -199,7 +199,11 @@
     .badge{font-size:10px;padding:2px 6px;}
     .admin-dates{display:flex;flex-direction:column;gap:10px;}
     .admin-dates>div{width:100%;min-width:0;}
-    .admin-dates input[type="date"]{display:block;width:100%;max-width:100%;min-width:0;height:40px;min-height:40px;max-height:40px;padding:0 10px;margin:0;box-sizing:border-box;font-size:16px;line-height:40px;}
+    .admin-dates input[type="date"]{display:block;width:100%;max-width:100%;min-width:0;height:40px;min-height:40px;max-height:40px;padding:0 10px;margin:0;box-sizing:border-box;font-size:16px;line-height:normal;}
+    .admin-dates input[type="date"]::-webkit-date-and-time-value{text-align:left;margin:0;}
+    .admin-dates input[type="date"]::-webkit-datetime-edit{padding:0;line-height:normal;}
+    .admin-dates input[type="date"]::-webkit-datetime-edit-fields-wrapper{padding:0;}
+    .admin-dates input[type="date"]::-webkit-calendar-picker-indicator{margin:0;padding:0;}
     select{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
   }
 </style>
