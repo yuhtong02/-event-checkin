@@ -27,6 +27,7 @@
     font-family: "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
   }
   *{box-sizing:border-box;}
+  body{margin:0;overflow-x:hidden;background:var(--cream);}
   .app{background:var(--cream);color:var(--ink);min-height:600px;border-radius:14px;overflow:hidden;
        display:flex;flex-direction:column;box-shadow:0 1px 3px rgba(0,0,0,.08);}
   .topbar{background:linear-gradient(135deg,var(--plum),var(--plum-dark));color:#fff;padding:18px 20px 14px;}
@@ -74,6 +75,11 @@
   .badge.出席{background:var(--green-bg);color:var(--green);}
   .badge.請假{background:var(--red-bg);color:var(--red);}
   .badge.留守{background:var(--amber-bg);color:var(--amber);}
+  .badge.其他{background:#f0f0f0;color:#666;}
+  .row-overcap{background:#fff5f5 !important;}
+  .row-overcap td{border-bottom-color:#e8c4c4 !important;}
+  .occ-over{color:var(--red) !important;font-weight:700;}
+  .tbl-overcap{color:var(--red) !important;font-weight:600;}
   .empty-state{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:13.5px;}
   .grid-tables{display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:12px;}
   .table-circle{width:84px;min-height:118px;background:#fff;border:2px solid var(--line);border-radius:8px;padding:14px 6px;text-align:center;
@@ -148,6 +154,47 @@
   .table-circle.main-table.full .num{background:var(--red);color:#fff;}
   .fp-rooms{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px;}
   .fp-room-tag{background:#EFE6EC;color:var(--plum-dark);font-size:11.5px;font-weight:700;padding:5px 12px;border-radius:20px;}
+
+  /* ── mobile responsive ── */
+  @media(max-width:420px){
+    .content{padding:12px 12px 20px;}
+    .card{padding:12px 14px;}
+    .topbar{padding:14px 14px 10px;}
+    .topbar h1{font-size:17px;}
+    .tabs{gap:2px;padding:0 6px;}
+    .tab{padding:10px 10px;font-size:12.5px;}
+    .row{gap:8px;}
+    .row > *{min-width:0;}
+    /* 葷食／素食 雙欄在窄螢幕改為單欄，其他 .row 維持可壓縮的雙欄 */
+    .row.meatveg > *{flex:1 1 100%;min-width:100%;}
+    .searchbox{font-size:18px;padding:14px 12px;}
+    .msg{font-size:12.5px;padding:8px 12px;}
+    .modal{padding:16px;max-width:100%;}
+    .btn{padding:9px 14px;font-size:13px;}
+    .btn-sm{padding:6px 8px;font-size:11.5px;}
+    .stat-grid{grid-template-columns:repeat(2,1fr);gap:8px;}
+    .stat-box .v{font-size:20px;}
+    .grid-tables{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:8px;}
+    .table-circle{width:72px;min-height:100px;padding:10px 4px;}
+    .table-circle .num{height:28px;font-size:14px;}
+    .table-circle .tname{font-size:10.5px;}
+    .table-circle .cap{font-size:11px;}
+    .table-index-list{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:4px 10px;}
+    .table-roster-list{grid-template-columns:1fr;}
+    .subtabs{gap:4px;}
+    .subtab{padding:6px 10px;font-size:11.5px;}
+    table.list{font-size:12px;}
+    table.list th,table.list td{padding:6px 5px;}
+    table.list select,table.list input{font-size:11.5px;padding:4px 4px;}
+    input[type=text],input[type=number],input[type=date],select,textarea{font-size:13.5px;padding:9px 10px;}
+    .poster{padding:14px 12px;}
+    .poster-head .pname{font-size:17px;}
+    .fp-room{padding:12px 10px 10px;}
+    .r-name{font-size:17px;}
+    .r-table{min-width:64px;padding:6px 12px;}
+    .r-table .n{font-size:18px;}
+    .badge{font-size:10px;padding:2px 6px;}
+  }
 </style>
 </head>
 <body>
@@ -284,6 +331,8 @@
     groupLabel: '部門',
     checkinMode: 'auto',
     registrationOpen: true,
+    registrationOpenDate: '',
+    registrationDeadline: '',
     staffRoster: [],
     layoutMode: 'auto',
     landmarks: [],
@@ -388,6 +437,9 @@
       render();
       return;
     }
+    // kick off the entries load now, in parallel with settings — the two round trips overlap
+    // instead of running one after another, so the page is ready sooner.
+    const entriesPromise = withTimeout(loadEntries(), 8000);
     try{
       let s = await withTimeout(loadSettings(), 8000);
       if(!s){
@@ -397,16 +449,17 @@
       }
       state.settings = s;
       state.settingsLoaded = true;
-      render(); // show the real title/content as soon as settings resolve — don't also wait on entries
-      state.entries = await withTimeout(loadEntries(), 8000) || [];
+      render(); // show the form as soon as settings are confirmed — don't also wait on entries
+      state.entries = await entriesPromise || [];
+      // refresh data-driven tabs if the user already navigated to one, but skip the register
+      // form — it doesn't depend on entries, and re-rendering right after load could steal
+      // keyboard focus while someone is already typing on mobile.
+      if(state.tab !== 'register') render();
     }catch(e){
       console.error('init failed', e);
       state.storageWarning = true;
     }
     state.settingsLoaded = true;
-    const snapshot = captureRegisterValues();
-    render();
-    restoreRegisterValues(snapshot);
   }
 
   function captureRegisterValues(){
@@ -517,6 +570,69 @@
     const list = (state.settings && state.settings.staffDepartments) || [];
     return list.includes(dept);
   }
+  // Category icon used in the admin UI. isStaffDept() stays the single source of truth for
+  // whether a unit counts as 員工 or 外部 — the name only picks a specific icon among staff
+  // units (so 鈺通飯店 that has been re-marked as 外部 still shows 🎫, never 🏨).
+  function deptIcon(dept){
+    if(!isStaffDept(dept)) return '🎫';
+    if(dept === '鈺通營造') return '🏗️';
+    if(dept === '鈺通飯店') return '🏨';
+    return '🏢';
+  }
+  // Registration-window helpers — the event date and the registration window are independent:
+  // the event date is only when the event is held; registration can open earlier / close earlier.
+  function parseRegDate(str){
+    if(!str) return null;
+    const m = String(str).trim().match(/^(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+    if(!m) return null;
+    let y = parseInt(m[1],10);
+    const mo = parseInt(m[2],10) - 1;
+    const d = parseInt(m[3],10);
+    if(y < 1000) y += 1911; // minguo-style year (e.g. 115 -> 2026; 4-digit years like 2026 pass through)
+    const dt = new Date(y, mo, d);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  function startOfDay(dt){ const x = new Date(dt); x.setHours(0,0,0,0); return x; }
+  function endOfDay(dt){ const x = new Date(dt); x.setHours(23,59,59,999); return x; }
+  // Convert a date string (minguo "115/09/04" or ISO "2026-09-04") to ISO "YYYY-MM-DD" for <input type="date">
+  function dateStrToISO(s){
+    if(!s) return '';
+    const dt = parseRegDate(s);
+    if(!dt) return '';
+    const y = dt.getFullYear(), m = String(dt.getMonth()+1).padStart(2,'0'), d = String(dt.getDate()).padStart(2,'0');
+    return y+'-'+m+'-'+d;
+  }
+  // Convert ISO "YYYY-MM-DD" (from <input type="date">) back to minguo "YY/MM/DD" for storage
+  function isoToMinguoDate(iso){
+    if(!iso) return '';
+    const parts = iso.split('-');
+    if(parts.length!==3) return iso; // pass through non-ISO
+    const y = parseInt(parts[0],10), m = parseInt(parts[1],10), d = parseInt(parts[2],10);
+    const mingY = y - 1911;
+    return mingY + '/' + String(m).padStart(2,'0') + '/' + String(d).padStart(2,'0');
+  }
+  // Returns {open, state:'open'|'notYet'|'closed'|'manualClosed', openDate?, deadline?}
+  function registrationStatus(s){
+    s = s || state.settings || {};
+    const hasNew = s.registrationOpenDate != null || s.registrationDeadline != null;
+    const now = new Date();
+    const openDate = parseRegDate(s.registrationOpenDate);
+    const deadline = parseRegDate(s.registrationDeadline);
+    // Deadline is always respected.
+    if(deadline && now > endOfDay(deadline)){
+      return { open:false, state:'closed', deadline:(s.registrationDeadline||'').trim() };
+    }
+    // Backward compatibility: settings saved before the window fields existed only had the
+    // manual registrationOpen flag — honor that only until the new fields are adopted.
+    if(!hasNew && s.registrationOpen === false){
+      return { open:false, state:'manualClosed' };
+    }
+    // If there's an open date and we haven't reached it yet → not yet open.
+    if(openDate && now < startOfDay(openDate)){
+      return { open:false, state:'notYet', openDate:(s.registrationOpenDate||'').trim() };
+    }
+    return { open:true, state:'open' };
+  }
 
   function nameWithCount(e){
     const t = personTotal(e) || (1+(parseInt(e.famCount)||0));
@@ -611,11 +727,28 @@
         ⚠️ 目前無法連接後端資料庫，資料可能不會保存/同步，請確認網路連線正常，或聯繫系統管理者確認伺服器設定。
       </div>` : '';
 
-      if(state.settingsLoaded && state.settings && state.settings.registrationOpen === false){
+      // don't show the form until settings are confirmed — avoids briefly showing
+      // a fillable form that then snaps to "已截止" / "尚未開放" once the real dates load
+      if(!state.settingsLoaded){
+        c.innerHTML = warnHtml + '<div class="empty-state">載入中...</div>';
+        return;
+      }
+
+      const regSt = registrationStatus(state.settings);
+      if(state.settingsLoaded && state.settings && !regSt.open){
+        let title = '目前未開放報名';
+        let detail = '這個活動目前沒有開放線上報名，請洽人事確認，或稍後再試。';
+        if(regSt.state === 'notYet'){
+          title = '報名尚未開放';
+          detail = `報名尚未開放，開放日期：${regSt.openDate}`;
+        }else if(regSt.state === 'closed'){
+          title = '報名已截止';
+          detail = `報名已截止，截止日期：${regSt.deadline}`;
+        }
         c.innerHTML = warnHtml + `
           <div class="card" style="max-width:380px;margin:20px auto;text-align:center;">
-            <h2>目前未開放報名</h2>
-            <div class="small">這個活動目前沒有開放線上報名，請洽人事確認，或稍後再試。</div>
+            <h2>${title}</h2>
+            <div class="small">${detail}</div>
             <div style="text-align:center;margin-top:16px;">
               <span id="staffLink" style="cursor:pointer;color:#C9B7C2;font-size:11.5px;text-decoration:underline;">人事後台入口</span>
             </div>
@@ -758,14 +891,25 @@
         <select id="f_dept">${depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
         <label>姓名 *</label>
         <input type="text" id="f_name" placeholder="請輸入姓名">
+        <label>眷屬人數</label>
+        <input type="number" id="f_famcount" value="0" min="0">
+        <div id="f_famnamesWrap" style="display:none;margin-top:8px;">
+          <label>攜眷姓名（請輸入名字方便核對）</label>
+          <input type="text" id="f_famnames" placeholder="例如：王太太、王小妹">
+        </div>
         <label>出席狀態</label>
         <select id="f_status">
           <option value="出席">出席</option>
           <option value="請假">請假</option>
           <option value="留守">留守</option>
+          <option value="其他">其他</option>
         </select>
-        <div class="small" style="margin-top:10px;">請填寫本次出席總人數（含您自己），分別填葷食、素食各幾位即可，不用兩邊加總對得剛剛好也沒關係，我們會自動加總：</div>
-        <div class="row">
+        <div id="f_reasonWrap" style="display:none;margin-top:8px;">
+          <label>原因 *</label>
+          <input type="text" id="f_reason" placeholder="請輸入原因">
+        </div>
+        <div class="small" style="margin-top:10px;">請填寫本人及眷屬的餐食人數，葷食與素食合計須等於本次出席人數：</div>
+        <div class="row meatveg">
           <div>
             <label>葷食人數</label>
             <input type="number" id="f_meat" value="1" min="0">
@@ -775,41 +919,110 @@
             <input type="number" id="f_veg" value="0" min="0">
           </div>
         </div>
-        <label>攜眷姓名（可留空，方便核對，不影響人數計算）</label>
-        <input type="text" id="f_famnames" placeholder="例如：王太太、王小妹">
         <label>備註</label>
         <input type="text" id="f_note" placeholder=" ">
         <div style="margin-top:14px;">
           <button class="btn btn-primary" id="submitBtn">送出報名</button>
         </div>
+        <div class="msg err" id="f_submitMsg" style="display:none;margin-top:12px;"></div>
       </div>
       <div class="small">送出後資料會立即進入系統，後台管理與座位圖會同步更新。</div>
     `;
+    // --- meat/veg auto-complement: editing one field adjusts the other ---
+    const famCountEl = document.getElementById('f_famcount');
+    const meatEl = document.getElementById('f_meat');
+    const vegEl = document.getElementById('f_veg');
+    const statusEl = document.getElementById('f_status');
+    const reasonWrap = document.getElementById('f_reasonWrap');
+    let lastEditedField = null; // 'meat' or 'veg' — which field the user last touched, so famCount changes can preserve it
+    function getTotal(){
+      return Math.max(1, 1 + (parseInt(famCountEl.value)||0));
+    }
+    function clampInt(v, min, max){
+      const n = parseInt(v, 10);
+      return Math.max(min, Math.min(max, (isNaN(n) ? 0 : n)));
+    }
+    // Recompute both fields from one source of truth (total) so meat + veg === total always holds.
+    // changedField is the one the user just edited; the other is derived as total − changed.
+    // The changed field is clamped to [0,total] FIRST, so shrinking total (via famCount) can't
+    // leave a stale value that pushes the pair above total.
+    function relegalizeMeatVeg(changedField){
+      const total = getTotal();
+      if(changedField === 'meat'){
+        const meat = clampInt(meatEl.value, 0, total);
+        meatEl.value = meat;
+        vegEl.value = total - meat;
+      }else{ // 'veg'
+        const veg = clampInt(vegEl.value, 0, total);
+        vegEl.value = veg;
+        meatEl.value = total - veg;
+      }
+    }
+    function initMeatVeg(){
+      const total = getTotal();
+      meatEl.value = total;
+      vegEl.value = 0;
+      lastEditedField = null;
+    }
+    meatEl.addEventListener('input', ()=>{ lastEditedField = 'meat'; relegalizeMeatVeg('meat'); });
+    vegEl.addEventListener('input', ()=>{ lastEditedField = 'veg'; relegalizeMeatVeg('veg'); });
+    const famNamesWrap = document.getElementById('f_famnamesWrap');
+    function updateFamNamesVisibility(){
+      famNamesWrap.style.display = (parseInt(famCountEl.value)||0) > 0 ? 'block' : 'none';
+    }
+    updateFamNamesVisibility(); // initial state
+    famCountEl.addEventListener('input', ()=>{
+      updateFamNamesVisibility();
+      const total = getTotal();
+      meatEl.max = total;
+      vegEl.max = total;
+      if(lastEditedField){
+        relegalizeMeatVeg(lastEditedField);
+      }else{
+        meatEl.value = total;
+        vegEl.value = 0;
+      }
+    });
+    statusEl.addEventListener('change', ()=>{
+      reasonWrap.style.display = statusEl.value === '其他' ? 'block' : 'none';
+    });
+    initMeatVeg();
+
     document.getElementById('submitBtn').onclick = async ()=>{
-      const name = document.getElementById('f_name').value.trim();
-      if(!name){ state.msg={type:'err',text:'請輸入姓名'}; render(); return; }
-
-      // refresh with the latest data first — the page may have been open for a while,
-      // and checking against stale/cached data can wrongly flag someone as a duplicate
-      // even after their old entry was deleted. Also re-confirms registration is still open.
-      // Both checks are independent, so run them in parallel instead of one after another.
       const btn = document.getElementById('submitBtn');
+      if(btn.disabled) return; // double-submit guard
+      const submitMsgEl = document.getElementById('f_submitMsg');
+      const showErr = (text)=>{ if(submitMsgEl){ submitMsgEl.textContent = text; submitMsgEl.style.display = 'block'; } };
       const originalLabel = btn.textContent;
-      btn.disabled = true; btn.textContent = '確認中...';
-      const [freshEntries, freshSettings] = await Promise.all([
-        withTimeout(loadEntries(), 5000).catch(()=>null),
-        withTimeout(loadSettings(), 5000).catch(()=>null),
-      ]);
-      if(freshEntries) state.entries = freshEntries;
-      if(freshSettings){ state.settings = freshSettings; state.settingsLoaded = true; }
-      btn.disabled = false; btn.textContent = originalLabel;
 
-      if(state.settings && state.settings.registrationOpen === false){
-        state.msg = {type:'err', text:'目前這個活動已經停止開放報名，如有疑問請洽人事。'};
-        render();
-        return;
+      // ---- all validation is local — no API round trips ----
+      const name = document.getElementById('f_name').value.trim();
+      if(!name){ showErr('請輸入姓名'); return; }
+      const status = statusEl.value;
+      if(status === '其他'){
+        const reason = (document.getElementById('f_reason').value||'').trim();
+        if(!reason){ showErr('請輸入原因'); return; }
+      }
+      const meatCount = Math.max(0, parseInt(meatEl.value)||0);
+      const vegCount = Math.max(0, parseInt(vegEl.value)||0);
+      const total = getTotal();
+      if(status==='出席'){
+        if(!Number.isInteger(meatCount) || !Number.isInteger(vegCount)){ showErr('葷食與素食人數必須是整數'); return; }
+        if(meatCount < 0 || vegCount < 0){ showErr('葷食與素食人數不可為負數'); return; }
+        if(meatCount + vegCount !== total){ showErr(`葷食 + 素食合計須等於出席人數 ${total} 人（目前合計 ${meatCount+vegCount} 人）`); return; }
+        if(meatCount + vegCount < 1){ showErr('出席人數（葷食+素食）至少要有 1 人'); return; }
       }
 
+      // registration status from the settings already loaded at init (no reload)
+      const regSt = registrationStatus(state.settings);
+      if(!regSt.open){
+        let text = '目前這個活動已經停止開放報名，如有疑問請洽人事。';
+        if(regSt.state === 'notYet') text = `報名尚未開放，將於 ${regSt.openDate} 開放報名`;
+        else if(regSt.state === 'closed') text = `報名已截止，截止日期：${regSt.deadline}`;
+        showErr(text); return;
+      }
+
+      // duplicate check against the entries already loaded (no reload)
       const dup = currentEntries().find(e=> e.name.trim() === name);
       if(dup){
         const proceed = confirm(
@@ -820,33 +1033,38 @@
         if(!proceed) return;
       }
 
-      const meatCount = Math.max(0, parseInt(document.getElementById('f_meat').value)||0);
-      const vegCount = Math.max(0, parseInt(document.getElementById('f_veg').value)||0);
-      if(document.getElementById('f_status').value==='出席' && meatCount+vegCount<1){
-        state.msg={type:'err',text:'出席人數（葷食+素食）至少要有 1 人'}; render(); return;
-      }
       const entry = {
         id: uid(),
         eventKey: eventKey(state.settings),
         dept: document.getElementById('f_dept').value,
         name,
-        status: document.getElementById('f_status').value,
+        status,
         meatCount, vegCount,
         famNames: document.getElementById('f_famnames').value.trim(),
+        famCount: parseInt(famCountEl.value)||0,
         note: document.getElementById('f_note').value.trim(),
         table: '',
         ts: Date.now(),
       };
-      // optimistic UI: show success immediately instead of waiting on the network round trip;
-      // the save still happens (with automatic retry), we just don't block the person on it.
-      state.entries.push(entry);
-      state.msg = {type:'ok', text:`已送出：${name}（${entry.dept}）— 感謝登記！`};
-      render();
+      if(status === '其他'){
+        entry.statusReason = (document.getElementById('f_reason').value||'').trim();
+      }
+
+      // same UI operation as the click: disable + feedback, prevent double-submit
+      btn.disabled = true;
+      btn.textContent = '送出中...';
+
+      // the ONLY network call — success is only shown after the real save completes
       const ok = await saveEntry(entry);
-      if(!ok){
-        state.msg = {type:'err', text:`⚠️「${name}」剛剛送出時網路不穩，可能沒有真的存進去，麻煩重新填寫一次以策安全。`};
-        state.entries = state.entries.filter(e=>e.id!==entry.id);
-        if(state.tab==='register') render();
+      if(ok){
+        state.entries.push(entry);
+        state.msg = {type:'ok', text:`✓ 報名成功：${name}（${entry.dept}）— 感謝登記！`};
+        render();
+      }else{
+        // keep everything the person typed; just restore the button and show the error inline
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        showErr('報名失敗，請再試一次（網路連線問題）。您填的資料都還保留著，沒有被清掉。');
       }
     };
   }
@@ -1372,11 +1590,25 @@
     const prevWrapHeight = floorWrap ? floorWrap.style.height : null;
     const prevWrapOverflow = floorWrap ? floorWrap.style.overflow : null;
     const prevWrapWidth = floorWrap ? floorWrap.style.width : null;
+    const prevWrapMargin = floorWrap ? floorWrap.style.margin : null;
     if(fpEl){ fpEl.style.transform = ''; }
     if(floorWrap){
       floorWrap.style.height = '';
       floorWrap.style.overflow = 'visible';
-      floorWrap.style.width = fpEl ? (fpEl.offsetWidth + 'px') : '';
+      floorWrap.style.width = '';
+      // center the floor plan horizontally inside the widened poster so both side margins are equal
+      floorWrap.style.margin = '0 auto';
+    }
+    // The freeform floor plan is a fixed 760px-wide element. On a narrow screen it is only
+    // scaled down for on-screen display (fitScaleToWrapper), and the export un-scales it back
+    // to full size — but if the poster stays phone-width the un-scaled 760px plan overflows the
+    // right edge of the gold frame. Widen the poster during capture so the plan (plus the
+    // poster's own padding/border) always sits fully inside the frame with room on both sides.
+    const prevPosterWidth = target.style.width;
+    const prevPosterMaxWidth = target.style.maxWidth;
+    if(fpEl){
+      target.style.maxWidth = 'none';
+      target.style.width = '860px'; // content ≈ 860−2*18(pad)−2*2(border) = 820 → ~30px margin each side
     }
     // the saved image only needs the floor plan itself, not the numbered table-index list below it
     const indexListEl = target.querySelector('.table-index-list');
@@ -1413,13 +1645,16 @@
       console.error(e);
       statusEl.textContent = '產生圖片失敗，請再試一次';
     }
-    // restore the on-screen mobile-fit scale, clipping, and the index list
+    // restore the on-screen mobile-fit scale, clipping, the poster width, and the index list
     if(indexListEl && prevIndexDisplay!=null){ indexListEl.style.display = prevIndexDisplay; }
     if(fpEl && prevTransform!=null){ fpEl.style.transform = prevTransform; }
+    if(prevPosterWidth!=null) target.style.width = prevPosterWidth; else target.style.width = '';
+    if(prevPosterMaxWidth!=null) target.style.maxWidth = prevPosterMaxWidth; else target.style.maxWidth = '';
     if(floorWrap){
       if(prevWrapHeight!=null) floorWrap.style.height = prevWrapHeight;
       if(prevWrapOverflow!=null) floorWrap.style.overflow = prevWrapOverflow;
       if(prevWrapWidth!=null) floorWrap.style.width = prevWrapWidth;
+      if(prevWrapMargin!=null) floorWrap.style.margin = prevWrapMargin;
     }
   }
 
@@ -1547,6 +1782,11 @@
 
   function renderAdminSettings(body){
     const s = state.settings;
+    const regSt = registrationStatus(s);
+    const regStatusText = regSt.open ? '開放中'
+      : (regSt.state==='notYet' ? `尚未開放（開放日期：${regSt.openDate}）`
+        : (regSt.state==='closed' ? `已截止（截止日期：${regSt.deadline}）`
+          : '已停止'));
     body.innerHTML = `
       <div class="small" id="settingsSaveStatus" style="min-height:18px;color:var(--red);font-weight:700;"></div>
       <div class="card">
@@ -1585,6 +1825,7 @@
           也不怕忙起來忘記按、或有人誤觸切換到錯誤狀態。
         </div>
         <label style="margin-top:10px;">報到開放時間</label>
+        <div class="small" style="margin-bottom:6px;">⚠️ 以下設定<b>只控制「報到」（現場報到/簽到）</b>，和上面的「報名開放期間」是分開的兩件事，互不影響。</div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
           <label style="display:flex;align-items:center;gap:8px;font-weight:normal;">
             <input type="radio" name="ckmode" value="auto" ${((s.checkinMode||'auto')==='auto')?'checked':''} style="width:auto;">
@@ -1606,25 +1847,24 @@
         </div>
       </div>
       <div class="card">
-        <h2>報名表開放狀態</h2>
-        <div class="small">這個開關<b>只控制「報名登記」表單</b>，跟上面的「報到開放時間」是分開的兩件事——
-          報到開放時間只影響報到查詢／報到台，不會擋住員工填寫報名表。如果想暫停讓人繼續填報名表
-          （例如測試完畢、或收單截止），用這裡的開關。</div>
-        <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:normal;">
-            <input type="radio" name="regmode" value="open" ${s.registrationOpen!==false?'checked':''} style="width:auto;">
-            <span>開放報名（一般狀態，讓同事可以填寫）</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;font-weight:normal;">
-            <input type="radio" name="regmode" value="closed" ${s.registrationOpen===false?'checked':''} style="width:auto;">
-            <span>停止報名（測試期間、或收單截止後使用，同事打開會看到「目前未開放報名」）</span>
-          </label>
+        <h2>報名開放期間</h2>
+        <div class="small">「活動日期」（上面）只代表真正活動舉辦的日期，和報名開放與否無關。
+          這裡另外控制<b>「報名登記」表單</b>何時開放、何時截止，可以提前開放讓人事先安排桌次（與上面的「報到開放時間」也是兩回事）。</div>
+        <div class="row" style="gap:8px;">
+          <div style="flex:1;"><label>報名開放日期</label>
+            <input type="date" id="a_regopen" value="${esc(dateStrToISO(s.registrationOpenDate||''))}"></div>
+          <div style="flex:1;"><label>報名截止日期</label>
+            <input type="date" id="a_regdeadline" value="${esc(dateStrToISO(s.registrationDeadline||''))}"></div>
         </div>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:normal;margin-top:12px;">
+          <span><b>報名狀態</b>由「報名開放日期」與「報名截止日期」自動決定，不需要手動開關。</span>
+        </label>
         <div style="margin-top:10px;">
           <span style="font-weight:700;">目前實際狀態：
-            <span style="color:${s.registrationOpen!==false?'var(--green)':'var(--red)'}">${s.registrationOpen!==false?'開放中':'已停止'}</span>
+            <span style="color:${regSt.open?'var(--green)':'var(--red)'}">${regStatusText}</span>
           </span>
         </div>
+        <div style="margin-top:12px;"><button class="btn btn-primary" id="saveRegWindow">儲存報名開放期間</button></div>
       </div>
       <div class="card">
         <h2>「${groupLabel()}」這個名稱可自訂</h2>
@@ -1647,13 +1887,12 @@
         </div>
         <div class="taglist" id="deptTags">
           ${s.departments.map(d=>{
-            const staff = isStaffDept(d);
-            return `<span class="tag">${staff?'🏢 ':'🎫 '}${esc(d)}
+            return `<span class="tag">${deptIcon(d)} ${esc(d)}
               <span class="landmark-del" data-toggle-staff="${esc(d)}" title="切換員工/外部" style="color:var(--plum);cursor:pointer;">⇄</span>
               <span class="x" data-d="${esc(d)}">&times;</span></span>`;
           }).join('')}
         </div>
-        <div class="small" style="margin-top:6px;">🏢 = 員工單位　🎫 = 外部貴賓／團體（點 ⇄ 可切換）</div>
+        <div class="small" style="margin-top:6px;">🏗️ / 🏨 / 🏢 = 員工單位　🎫 = 外部貴賓／團體（點 ⇄ 可切換）</div>
       </div>
     `;
     // Keeps whatever is currently typed in EVERY input on this page synced into `s`, before any
@@ -1716,15 +1955,24 @@
         if(!ok) s.checkinMode = prevMode; // roll back the in-memory change too, so a later unrelated save doesn't silently carry the failed change forward
       };
     });
-    body.querySelectorAll('input[name="regmode"]').forEach(radio=>{
-      radio.onchange = async ()=>{
-        syncBasicInputsToState();
-        const prevOpen = s.registrationOpen;
-        s.registrationOpen = (radio.value === 'open');
-        const ok = await persistBasic(s.registrationOpen ? '已開放報名' : '已停止報名');
-        if(!ok) s.registrationOpen = prevOpen;
-      };
-    });
+    document.getElementById('saveRegWindow').onclick = async ()=>{
+      syncBasicInputsToState();
+      // snapshot the window fields for rollback if the save fails
+      const prev = { openDate:s.registrationOpenDate, deadline:s.registrationDeadline };
+      // convert ISO date-picker values back to minguo for storage
+      const isoOpen = document.getElementById('a_regopen').value.trim();
+      const isoDead = document.getElementById('a_regdeadline').value.trim();
+      s.registrationOpenDate = isoOpen ? isoToMinguoDate(isoOpen) : '';
+      s.registrationDeadline = isoDead ? isoToMinguoDate(isoDead) : '';
+      // adopting the new window model — the legacy manual flag no longer governs from here on
+      s.registrationOpen = true;
+      const ok = await persistBasic('已更新報名開放期間');
+      if(!ok){
+        s.registrationOpenDate = prev.openDate;
+        s.registrationDeadline = prev.deadline;
+        render(); // re-render to restore the input values to the rolled-back state
+      }
+    };
     document.getElementById('savePin').onclick = async ()=>{
       syncBasicInputsToState();
       await persistBasic(s.adminPin? '已設定密碼' : '已取消密碼保護');
@@ -1792,21 +2040,33 @@
     body.innerHTML = `
       <div class="card">
         <h2>桌次設定</h2>
+        <div style="overflow-x:auto;">
         <table class="list" id="tableTbl">
-          <thead><tr><th>桌號</th><th>桌名/備註</th><th>人數上限</th><th>目前人數</th><th></th></tr></thead>
+          <thead><tr>
+            <th style="width:34px;"><input type="checkbox" id="tblSelectAll" title="全選"></th>
+            <th>桌號</th><th>桌名/備註</th><th>人數上限</th><th>目前人數</th><th></th>
+          </tr></thead>
           <tbody>
-            ${s.tables.map((t,i)=>`
-              <tr>
-                <td><input type="text" value="${esc(t.no)}" data-i="${i}" data-f="no" style="width:60px;"></td>
+            ${s.tables.map((t,i)=>{
+              const occ = tableOccupancy(t.no);
+              const over = occ > t.capacity;
+              return `
+              <tr class="${over?'row-overcap':''}" style="${over?'border-left:4px solid var(--red);':''}">
+                <td><input type="checkbox" class="tblSel" data-i="${i}" title="勾選以批次刪除"></td>
+                <td>${over?'⚠️ ':''}<input type="text" value="${esc(t.no)}" data-i="${i}" data-f="no" style="width:60px;"></td>
                 <td><input type="text" value="${esc(t.name)}" data-i="${i}" data-f="name"></td>
                 <td><input type="number" value="${esc(t.capacity)}" data-i="${i}" data-f="capacity" style="width:70px;"></td>
-                <td>${tableOccupancy(t.no)}</td>
+                <td class="occ ${over?'occ-over':''}">${over?`⚠️ ${occ} / ${t.capacity}`:occ}</td>
                 <td><button class="btn-danger" data-del="${i}">刪除</button></td>
-              </tr>`).join('')}
+              </tr>`;}).join('')}
           </tbody>
         </table>
-        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button class="btn btn-ghost" id="addTable">+ 新增一桌</button>
+          <input type="number" id="addTableCount" value="1" min="1" max="100" style="width:64px;" title="要一次新增的桌數">
+          <button class="btn btn-ghost" id="addTablesBatch">＋ 一次新增</button>
+          <button class="btn btn-danger" id="delTablesBatch">🗑️ 刪除勾選桌次</button>
           <button class="btn btn-primary" id="saveTables">儲存桌次設定</button>
           <span class="small" id="tablesSaveStatus"></span>
         </div>
@@ -1824,7 +2084,8 @@
     // succeeded — e.g. add a table, then also click save — never queues the same entry twice.
     const migratedEntries = new Map();
     function syncTableInputsToState(){
-      body.querySelectorAll('#tableTbl input').forEach(inp=>{
+      // only the editable fields carry data-f; the row/header checkboxes must be skipped
+      body.querySelectorAll('#tableTbl input[data-f]').forEach(inp=>{
         const i = parseInt(inp.dataset.i), f = inp.dataset.f;
         if(!s.tables[i]) return;
         const newVal = f==='capacity' ? (parseInt(inp.value)||0) : inp.value.trim();
@@ -1887,6 +2148,44 @@
     document.getElementById('saveTables').onclick = async ()=>{
       syncTableInputsToState();
       await persistTables('已儲存桌次設定');
+    };
+    // --- batch add: add N tables at once, persisting only once (rollback on failure) ---
+    document.getElementById('addTablesBatch').onclick = async ()=>{
+      syncTableInputsToState(); // keep any unsaved edits in the OTHER rows before adding
+      const count = Math.max(1, Math.min(parseInt(document.getElementById('addTableCount').value)||0, 100));
+      const maxNo = s.tables.reduce((m,t)=>Math.max(m, parseInt(t.no)||0), 0);
+      const prevTables = JSON.parse(JSON.stringify(s.tables)); // snapshot for rollback
+      const added = [];
+      for(let i=1;i<=count;i++) added.push({no:maxNo+i, name:'', capacity:10, x:50, y:50});
+      s.tables = s.tables.concat(added);
+      const ok = await persistTables(`已一次新增 ${count} 桌`);
+      if(!ok) s.tables = prevTables; // rollback to the exact pre-add state on failure
+    };
+    // --- batch delete: remove all checked tables, persisting only once (rollback on failure) ---
+    document.getElementById('tblSelectAll').onchange = (e)=>{
+      const chk = e.target.checked;
+      body.querySelectorAll('.tblSel').forEach(cb=>{ cb.checked = chk; });
+    };
+    document.getElementById('delTablesBatch').onclick = async ()=>{
+      syncTableInputsToState(); // keep any unsaved edits in the OTHER rows before deleting
+      const indexes = Array.from(body.querySelectorAll('.tblSel:checked'))
+        .map(cb=>parseInt(cb.dataset.i))
+        .filter(i=> !isNaN(i) && s.tables[i]);
+      if(indexes.length===0){ alert('請先勾選要刪除的桌次。'); return; }
+      const nosToDelete = indexes.map(i=>String(s.tables[i].no));
+      const assigned = currentEntries().filter(e=> nosToDelete.includes(String(e.table)));
+      let msg = `確定要刪除勾選的 ${indexes.length} 桌嗎？`;
+      if(assigned.length>0){
+        msg += `\n\n⚠️ 有 ${assigned.length} 位人員目前被安排在這些桌次。`
+          + `刪除後，這些人的「桌號」暫時找不到對應桌次，但系統不會自動清除、修改或搬移他們的桌號。`;
+      }
+      msg += `\n\n這個動作無法復原。`;
+      if(!confirm(msg)) return;
+      const prevTables = JSON.parse(JSON.stringify(s.tables)); // snapshot for rollback
+      indexes.sort((a,b)=>b-a); // splice from the highest index down so positions stay valid
+      indexes.forEach(i=> s.tables.splice(i,1));
+      const ok = await persistTables(`已刪除 ${indexes.length} 桌`);
+      if(!ok) s.tables = prevTables; // rollback to the exact pre-delete state on failure
     };
   }
 
@@ -2200,6 +2499,7 @@
     if(!entry) return;
     const s = state.settings;
     const mv = entryMeatVeg(entry);
+    const efamCount = entry.famCount != null ? entry.famCount : (entry.famNames ? entry.famNames.split(/[,，、]/).length : 0);
     const host = document.createElement('div');
     host.innerHTML = `
       <div class="modal-backdrop" id="editBackdrop">
@@ -2215,8 +2515,15 @@
             <option value="出席" ${entry.status==='出席'?'selected':''}>出席</option>
             <option value="請假" ${entry.status==='請假'?'selected':''}>請假</option>
             <option value="留守" ${entry.status==='留守'?'selected':''}>留守</option>
+            <option value="其他" ${entry.status==='其他'?'selected':''}>其他</option>
           </select>
-          <div class="row">
+          <div id="e_reasonWrap" style="display:${entry.status==='其他'?'block':'none'};margin-top:8px;">
+            <label>原因 *</label>
+            <input type="text" id="e_reason" value="${esc(entry.statusReason||'')}" placeholder="請輸入原因">
+          </div>
+          <label>眷屬人數（不含本人）</label>
+          <input type="number" id="e_famcount" value="${efamCount}" min="0">
+          <div class="row meatveg">
             <div>
               <label>葷食人數</label>
               <input type="number" id="e_meat" min="0" value="${mv.meat}">
@@ -2226,8 +2533,10 @@
               <input type="number" id="e_veg" min="0" value="${mv.veg}">
             </div>
           </div>
-          <label>攜眷姓名</label>
-          <input type="text" id="e_famnames" value="${esc(entry.famNames||'')}">
+          <div id="e_famnamesWrap" style="display:${(parseInt(efamCount)||0)>0?'block':'none'};margin-top:8px;">
+            <label>攜眷姓名</label>
+            <input type="text" id="e_famnames" value="${esc(entry.famNames||'')}">
+          </div>
           <label>備註</label>
           <input type="text" id="e_note" value="${esc(entry.note||'')}">
           <div class="small" style="margin-top:8px;">💡 若此人不出席了，把「出席狀態」改成「請假」即可，不需要刪除整筆資料。</div>
@@ -2239,6 +2548,46 @@
         </div>
       </div>`;
     document.body.appendChild(host);
+    // --- meat/veg auto-complement for edit modal ---
+    const eFamCountEl = document.getElementById('e_famcount');
+    const eMeatEl = document.getElementById('e_meat');
+    const eVegEl = document.getElementById('e_veg');
+    const eStatusEl = document.getElementById('e_status');
+    const eReasonWrap = document.getElementById('e_reasonWrap');
+    let eLastEditedField = null;
+    function eGetTotal(){ return Math.max(1, 1 + (parseInt(eFamCountEl.value)||0)); }
+    function eClampInt(v, min, max){
+      const n = parseInt(v, 10);
+      return Math.max(min, Math.min(max, (isNaN(n) ? 0 : n)));
+    }
+    // Same rule as the register form: clamp the edited field to [0,total] then derive the other,
+    // so eMeatEl + eVegEl === total always holds — including when total shrinks via famCount.
+    function eRelegalizeMeatVeg(changedField){
+      const total = eGetTotal();
+      if(changedField === 'meat'){
+        const meat = eClampInt(eMeatEl.value, 0, total);
+        eMeatEl.value = meat;
+        eVegEl.value = total - meat;
+      }else{ // 'veg'
+        const veg = eClampInt(eVegEl.value, 0, total);
+        eVegEl.value = veg;
+        eMeatEl.value = total - veg;
+      }
+    }
+    eMeatEl.addEventListener('input', ()=>{ eLastEditedField = 'meat'; eRelegalizeMeatVeg('meat'); });
+    eVegEl.addEventListener('input', ()=>{ eLastEditedField = 'veg'; eRelegalizeMeatVeg('veg'); });
+    eFamCountEl.addEventListener('input', ()=>{
+      document.getElementById('e_famnamesWrap').style.display = (parseInt(eFamCountEl.value)||0) > 0 ? 'block' : 'none';
+      const total = eGetTotal();
+      eMeatEl.max = total;
+      eVegEl.max = total;
+      if(eLastEditedField) eRelegalizeMeatVeg(eLastEditedField);
+    });
+    eStatusEl.addEventListener('change', ()=>{
+      eReasonWrap.style.display = eStatusEl.value === '其他' ? 'block' : 'none';
+      if(eStatusEl.value !== '其他') document.getElementById('e_reason').value = '';
+    });
+
     const close = ()=> host.remove();
     document.getElementById('editClose').onclick = close;
     document.getElementById('editCancelBtn').onclick = close;
@@ -2246,13 +2595,20 @@
     document.getElementById('editSaveBtn').onclick = ()=>{
       entry.dept = document.getElementById('e_dept').value;
       entry.name = document.getElementById('e_name').value.trim() || entry.name;
-      entry.status = document.getElementById('e_status').value;
-      entry.meatCount = Math.max(0, parseInt(document.getElementById('e_meat').value)||0);
-      entry.vegCount = Math.max(0, parseInt(document.getElementById('e_veg').value)||0);
-      delete entry.diet; delete entry.famCount; // fully migrate this entry to the new format once edited
+      entry.status = eStatusEl.value;
+      entry.meatCount = Math.max(0, parseInt(eMeatEl.value)||0);
+      entry.vegCount = Math.max(0, parseInt(eVegEl.value)||0);
+      entry.famCount = parseInt(eFamCountEl.value)||0;
+      delete entry.diet; // fully migrate this entry to the new format once edited
       entry.famNames = document.getElementById('e_famnames').value.trim();
       entry.note = document.getElementById('e_note').value.trim();
+      if(entry.status === '其他'){
+        entry.statusReason = (document.getElementById('e_reason').value||'').trim();
+      }else{
+        delete entry.statusReason;
+      }
       close(); render();
+      // over-capacity warning (immediate, from local state)
       if(entry.table){
         const tbl = state.settings.tables.find(t=>String(t.no)===String(entry.table));
         if(tbl){
@@ -2408,6 +2764,7 @@
     body.innerHTML = `
       <div class="card">
         <h2>名單管理－本次活動（最新報名排最上面；可編輯人數/狀態、指派桌號、刪除）
+          <button class="btn btn-danger btn-sm" id="delCheckedList" style="float:right;margin-left:8px;">🗑️ 刪除勾選資料</button>
           <button class="btn btn-ghost btn-sm" id="refreshList" style="float:right;margin-left:8px;">重新整理</button>
           <button class="btn btn-ghost btn-sm" id="exportCsv" style="float:right;">⬇️ 匯出 CSV</button>
         </h2>
@@ -2417,23 +2774,26 @@
         </div>` : ''}
         <div style="overflow:auto;max-height:480px;" id="adminListScroll">
         <table class="list">
-          <thead><tr><th>${groupLabel()}</th><th>姓名</th><th>狀態</th><th>葷</th><th>素</th><th>眷屬</th><th>桌號</th><th>備註</th><th></th></tr></thead>
+          <thead><tr><th style="width:34px;"><input type="checkbox" id="listSelectAll" title="全選"></th><th>${groupLabel()}</th><th>姓名</th><th>狀態</th><th>葷</th><th>素</th><th>眷屬</th><th>桌號</th><th>備註</th><th></th></tr></thead>
           <tbody>
             ${list.map(e=>{ const mv=entryMeatVeg(e); return `
-              <tr data-id="${e.id}">
+              <tr data-id="${e.id}" class="${e.status==='出席' && e.table && tableOccupancy(e.table)>((state.settings.tables.find(t=>String(t.no)===String(e.table))||{}).capacity||0) ? 'row-overcap' : ''}">
+                <td><input type="checkbox" class="listSel" data-id="${e.id}" title="勾選以批次刪除"></td>
                 <td>${esc(e.dept)}</td>
                 <td>${nameCounts[e.name.trim()]>1?'🔁 ':''}${esc(e.name)}</td>
                 <td><span class="badge ${esc(e.status)}">${esc(e.status)}</span></td>
                 <td>${mv.meat||''}</td>
                 <td>${mv.veg||''}</td>
-                <td>${esc(e.famNames||'')}</td>
-                <td>${e.status==='出席' ? `<select data-field="table" style="width:110px;">
+                <td>${(e.famCount>0||(e.famCount!=null)) ? (esc(e.famCount)+'人'+(e.famNames?`（${esc(e.famNames)}）`:'')) : esc(e.famNames||'')}</td>
+                <td>${e.status==='出席' ? `<select data-field="table" ${e.table&&tableOccupancy(e.table)>((state.settings.tables.find(t=>String(t.no)===String(e.table))||{}).capacity||0) ? 'class="tbl-overcap"' : ''} style="width:110px;">
                   <option value="">未排</option>
                   ${s.tables.map(t=>{
                     const occ = tableOccupancy(t.no);
-                    return `<option value="${esc(t.no)}" ${String(e.table)===String(t.no)?'selected':''}>${esc(t.no)}桌 (${occ}/${esc(t.capacity)})</option>`;
+                    const cap = parseInt(t.capacity)||0;
+                    const over = occ > cap;
+                    return `<option value="${esc(t.no)}" ${String(e.table)===String(t.no)?'selected':''}>${over?'⚠️ ':''}${esc(t.no)}桌 (${occ}/${cap})</option>`;
                   }).join('')}
-                </select>` : `<span class="small" style="color:#C9B7C2;">— 不需排桌</span>`}</td>
+                </select>` : `<span class="small" style="color:#C9B7C2;">— 不需排桌</span>`}${e.table && e.status==='出席' && tableOccupancy(e.table)>((state.settings.tables.find(t=>String(t.no)===String(e.table))||{}).capacity||0) ? ` <span style="color:var(--red);font-weight:700;">⚠️ 超額</span>` : ''}</td>
                 <td>${esc(e.note||'')}</td>
                 <td style="white-space:nowrap;">
                   <button class="btn btn-ghost btn-sm" data-edit-entry="${e.id}">編輯</button>
@@ -2449,30 +2809,67 @@
     `;
     document.getElementById('refreshList').onclick = refreshEntries;
     document.getElementById('exportCsv').onclick = ()=> exportEntriesCsv();
+    document.getElementById('listSelectAll').onchange = (e)=>{
+      const chk = e.target.checked;
+      body.querySelectorAll('.listSel').forEach(cb=>{ cb.checked = chk; });
+    };
+    document.getElementById('delCheckedList').onclick = async ()=>{
+      const checked = Array.from(body.querySelectorAll('.listSel:checked'));
+      if(checked.length===0){ alert('請先勾選要刪除的資料。'); return; }
+      if(!confirm(`確定要刪除勾選的 ${checked.length} 筆資料嗎？\n\n刪除後無法復原。`)) return;
+      const ids = checked.map(cb=>cb.dataset.id);
+      const btn = document.getElementById('delCheckedList');
+      btn.disabled = true; btn.textContent = '刪除中...';
+      // run deletions in parallel; a failure on one must never take down the rest
+      const results = await Promise.allSettled(ids.map(id=> deleteEntry(id)));
+      let success = 0, failed = 0;
+      const successIds = new Set();
+      const failedNames = [];
+      checked.forEach((cb, idx)=>{
+        const r = results[idx];
+        if(r.status==='fulfilled' && r.value===true){ success++; successIds.add(ids[idx]); }
+        else{ failed++; const entry = state.entries.find(x=>x.id===ids[idx]); if(entry) failedNames.push(entry.name); }
+      });
+      // only entries whose cloud deletion actually succeeded may be dropped locally
+      state.entries = state.entries.filter(e=> !successIds.has(e.id));
+      state.msg = failed===0
+        ? {type:'ok', text:`已刪除 ${success} 筆資料`}
+        : {type:'err', text:`已刪除 ${success} 筆，${failed} 筆刪除失敗（${failedNames.join('、')}），失敗的資料仍保留在名單中`};
+      render();
+    };
     body.querySelectorAll('select[data-field="table"]').forEach(sel=>{
       sel.onchange = async ()=>{
         const id = sel.closest('tr').dataset.id;
         const entry = state.entries.find(x=>x.id===id);
-        const oldTable = entry.table;
+        const oldTable = entry.table; // snapshot for rollback
         const newTable = sel.value;
+        // optimistic update: apply to local state and refresh the on-screen counts right away,
+        // so the user sees the table counts & over-capacity styling change immediately. render()
+        // here re-renders purely from local state.entries — no cloud re-fetch, no artificial
+        // delay — and the list view already preserves its scroll position across the rebuild.
         entry.table = newTable;
-        sel.disabled = true;
-        const ok = await saveEntry(entry);
-        sel.disabled = false;
-        if(!ok){
-          entry.table = oldTable; // roll back the in-memory change
-          sel.value = oldTable; // and what's actually shown in the dropdown
-          alert(`⚠️ 桌號儲存失敗，請檢查網路後重試。「${entry.name}」目前仍維持原本的桌號設定。`);
-          return;
-        }
+        render();
+        // over-capacity check runs immediately off local state — same operation cycle as the
+        // selection — BEFORE the network save. No waiting on saveEntry/no artificial delay.
         if(newTable){
           const tbl = s.tables.find(t=>String(t.no)===String(newTable));
           if(tbl){
             const occ = tableOccupancy(tbl.no);
             if(occ > tbl.capacity){
-              alert(`⚠️ 注意：第 ${tbl.no} 桌${tbl.name?('・'+tbl.name):''} 目前已經 ${occ} 人，超過上限 ${tbl.capacity} 人！請調整座位安排。`);
+              alert(`⚠️ 第 ${tbl.no} 桌已超過容量　目前 ${occ} 人 / 容量 ${tbl.capacity} 人　超出 ${occ - tbl.capacity} 人`);
             }
           }
+        }
+        // persist in the background through the existing API
+        const ok = await saveEntry(entry);
+        if(!ok){
+          // roll back to the original table and refresh the counts back — render() re-evaluates
+          // occupancy & warnings from the restored local state, so any false over-capacity
+          // highlight is removed along with the counts.
+          entry.table = oldTable;
+          render();
+          alert(`⚠️ 排桌儲存失敗，已恢復原桌次。請檢查網路後重試。「${entry.name}」目前仍維持原本的桌號設定。`);
+          return;
         }
       };
     });
@@ -2549,14 +2946,16 @@
       </div>
       <div class="card">
         <h2>各${groupLabel()}統計</h2>
+        <div style="overflow-x:auto;">
         <table class="list">
           <thead><tr><th>${groupLabel()}</th><th>類別</th><th>出席</th><th>葷食</th><th>素食</th><th>眷屬</th><th>小計</th></tr></thead>
           <tbody>
             ${Object.entries(byDept).map(([d,v])=>`
-              <tr><td>${esc(d)}</td><td>${isStaffDept(d)?'🏢 員工':'🎫 外部'}</td><td>${v.attend}</td><td>${v.meat}</td><td>${v.veg}</td><td>${v.fam}</td><td>${v.total}</td></tr>
+              <tr><td>${esc(d)}</td><td>${deptIcon(d)} ${isStaffDept(d)?'員工':'外部'}</td><td>${v.attend}</td><td>${v.meat}</td><td>${v.veg}</td><td>${v.fam}</td><td>${v.total}</td></tr>
             `).join('')}
           </tbody>
         </table>
+        </div>
       </div>
     `;
   }
