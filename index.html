@@ -180,13 +180,16 @@
     .table-circle .tname{font-size:10.5px;}
     .table-circle .cap{font-size:11px;}
     .table-index-list{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:4px 10px;}
-    .table-roster-list{grid-template-columns:1fr;}
+    /* NOTE: .table-roster-list is only used by the off-screen #rosterPosterCapture, which must
+       stay multi-column at its fixed 820px width regardless of viewport — never collapse it to
+       1fr here, or the downloaded roster PNG becomes a single tall column of cards. */
     .subtabs{gap:4px;}
     .subtab{padding:6px 10px;font-size:11.5px;}
     table.list{font-size:12px;}
     table.list th,table.list td{padding:6px 5px;}
     table.list select,table.list input{font-size:11.5px;padding:4px 4px;}
-    input[type=text],input[type=number],input[type=date],select,textarea{font-size:13.5px;padding:9px 10px;}
+    /* 16px minimum prevents iOS auto-zoom on input focus (no maximum-scale=1 / user-scalable=no) */
+    input[type=text],input[type=number],input[type=date],select,textarea,button{font-size:16px;padding:9px 10px;}
     .poster{padding:14px 12px;}
     .poster-head .pname{font-size:17px;}
     .fp-room{padding:12px 10px 10px;}
@@ -194,6 +197,9 @@
     .r-table{min-width:64px;padding:6px 12px;}
     .r-table .n{font-size:18px;}
     .badge{font-size:10px;padding:2px 6px;}
+    .admin-dates{flex-direction:column;gap:8px;}
+    .admin-dates>div{flex:none;width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
+    select{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
   }
 </style>
 </head>
@@ -770,7 +776,17 @@
     tabsEl.innerHTML = TABS.map(t=>`<div class="tab ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}</div>`).join('')
       + `<div class="tab" id="exitStaff" style="margin-left:auto;color:#D9C3D1;">🔒 返回員工填寫畫面</div>`;
     tabsEl.querySelectorAll('.tab[data-tab]').forEach(el=>{
-      el.onclick = ()=>{ state.tab = el.dataset.tab; state.msg=null; render(); if(state.tab!=='register') refreshEntries(); };
+      el.onclick = ()=>{
+        state.tab = el.dataset.tab; state.msg=null;
+        // Every GENUINE entry into 後台管理 from the front resets the admin subtab to 基本設定.
+        // This runs only on an actual top-tab click (entering admin), never on internal admin
+        // renders (auto-refresh / subtab switches go through renderAdmin and the subtab handler
+        // below, which do not touch adminSub) — so switching to 桌次設定/統計/etc. inside admin,
+        // or any in-admin refresh, is unaffected.
+        if(state.tab==='admin') state.adminSub = 'settings';
+        render();
+        if(state.tab!=='register') refreshEntries();
+      };
     });
     document.getElementById('exitStaff').onclick = ()=>{ state.staffUnlocked=false; state.tab='register'; render(); };
 
@@ -866,7 +882,7 @@
     if(pin){
       document.getElementById('staffPinBtn').onclick = ()=>{
         if(document.getElementById('staffPinInput').value === pin){
-          state.staffUnlocked = true; state.tab = 'checkin';
+          state.staffUnlocked = true; state.tab = 'admin'; state.adminSub = 'settings';
           close(); render();
         }else{
           document.getElementById('staffPinErr').textContent = '密碼錯誤';
@@ -892,7 +908,7 @@
         <label>姓名 *</label>
         <input type="text" id="f_name" placeholder="請輸入姓名">
         <label>眷屬人數</label>
-        <input type="number" id="f_famcount" value="0" min="0">
+        <select id="f_famcount">${Array.from({length:11},(_,i)=>`<option value="${i}">${i}</option>`).join('')}</select>
         <div id="f_famnamesWrap" style="display:none;margin-top:8px;">
           <label>攜眷姓名（請輸入名字方便核對）</label>
           <input type="text" id="f_famnames" placeholder="例如：王太太、王小妹">
@@ -912,11 +928,11 @@
         <div class="row meatveg">
           <div>
             <label>葷食人數</label>
-            <input type="number" id="f_meat" value="1" min="0">
+            <select id="f_meat"></select>
           </div>
           <div>
             <label>素食人數</label>
-            <input type="number" id="f_veg" value="0" min="0">
+            <select id="f_veg"></select>
           </div>
         </div>
         <label>備註</label>
@@ -935,6 +951,10 @@
     const statusEl = document.getElementById('f_status');
     const reasonWrap = document.getElementById('f_reasonWrap');
     let lastEditedField = null; // 'meat' or 'veg' — which field the user last touched, so famCount changes can preserve it
+    // Dynamic options for meat/veg selects based on total attendees
+    function populateMeatVegOpts(selEl, count){
+      selEl.innerHTML = Array.from({length:count+1},(_,i)=>`<option value="${i}">${i}</option>`).join('');
+    }
     function getTotal(){
       return Math.max(1, 1 + (parseInt(famCountEl.value)||0));
     }
@@ -948,37 +968,42 @@
     // leave a stale value that pushes the pair above total.
     function relegalizeMeatVeg(changedField){
       const total = getTotal();
+      // The non-edited field can only take 0..(total−edited), so restrict its options first
       if(changedField === 'meat'){
         const meat = clampInt(meatEl.value, 0, total);
         meatEl.value = meat;
+        populateMeatVegOpts(vegEl, total - meat); // remaining
         vegEl.value = total - meat;
       }else{ // 'veg'
         const veg = clampInt(vegEl.value, 0, total);
         vegEl.value = veg;
+        populateMeatVegOpts(meatEl, total - veg); // remaining
         meatEl.value = total - veg;
       }
     }
     function initMeatVeg(){
       const total = getTotal();
+      populateMeatVegOpts(meatEl, total);
+      populateMeatVegOpts(vegEl, total);
       meatEl.value = total;
       vegEl.value = 0;
       lastEditedField = null;
     }
-    meatEl.addEventListener('input', ()=>{ lastEditedField = 'meat'; relegalizeMeatVeg('meat'); });
-    vegEl.addEventListener('input', ()=>{ lastEditedField = 'veg'; relegalizeMeatVeg('veg'); });
+    meatEl.addEventListener('change', ()=>{ lastEditedField = 'meat'; relegalizeMeatVeg('meat'); });
+    vegEl.addEventListener('change', ()=>{ lastEditedField = 'veg'; relegalizeMeatVeg('veg'); });
     const famNamesWrap = document.getElementById('f_famnamesWrap');
     function updateFamNamesVisibility(){
       famNamesWrap.style.display = (parseInt(famCountEl.value)||0) > 0 ? 'block' : 'none';
     }
     updateFamNamesVisibility(); // initial state
-    famCountEl.addEventListener('input', ()=>{
+    famCountEl.addEventListener('change', ()=>{
       updateFamNamesVisibility();
-      const total = getTotal();
-      meatEl.max = total;
-      vegEl.max = total;
       if(lastEditedField){
         relegalizeMeatVeg(lastEditedField);
       }else{
+        const total = getTotal();
+        populateMeatVegOpts(meatEl, total);
+        populateMeatVegOpts(vegEl, total);
         meatEl.value = total;
         vegEl.value = 0;
       }
@@ -1674,8 +1699,13 @@
     statusEl.textContent = '產生圖片中...';
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     try{
-      const fullWidth = Math.max(target.scrollWidth, target.offsetWidth);
-      const fullHeight = Math.max(target.scrollHeight, target.offsetHeight);
+      // Roster height is driven by the ACTUAL rendered content box (getBoundingClientRect),
+      // not the seating poster's logic — so it stays tight to the cards with just a small
+      // bottom margin, and grows naturally for 15/25/45+ tables. (rect.width/height are
+      // correct for off-screen absolute elements; they don't depend on left:-9999px.)
+      const rect = target.getBoundingClientRect();
+      const fullWidth = Math.ceil(rect.width);
+      const fullHeight = Math.ceil(rect.height) + 24; // reasonable 留白, not a giant empty area
       const canvas = await html2canvas(target, {
         backgroundColor:'#FBF5F8', scale:2,
         width: fullWidth, height: fullHeight,
@@ -1850,7 +1880,7 @@
         <h2>報名開放期間</h2>
         <div class="small">「活動日期」（上面）只代表真正活動舉辦的日期，和報名開放與否無關。
           這裡另外控制<b>「報名登記」表單</b>何時開放、何時截止，可以提前開放讓人事先安排桌次（與上面的「報到開放時間」也是兩回事）。</div>
-        <div class="row" style="gap:8px;">
+        <div class="row admin-dates" style="gap:8px;">
           <div style="flex:1;"><label>報名開放日期</label>
             <input type="date" id="a_regopen" value="${esc(dateStrToISO(s.registrationOpenDate||''))}"></div>
           <div style="flex:1;"><label>報名截止日期</label>
@@ -1978,8 +2008,16 @@
       await persistBasic(s.adminPin? '已設定密碼' : '已取消密碼保護');
     };
     document.getElementById('saveBasic').onclick = async ()=>{
+      // snapshot before syncing so a failed save can roll back state.settings — otherwise
+      // the unsaved new name/date would leak to the public register page on its next render.
+      const prev = { eventName:s.eventName, eventDate:s.eventDate, eventTime:s.eventTime, eventLocation:s.eventLocation };
       syncBasicInputsToState();
-      await persistBasic('已儲存');
+      const ok = await persistBasic('已儲存');
+      if(!ok){
+        s.eventName = prev.eventName; s.eventDate = prev.eventDate;
+        s.eventTime = prev.eventTime; s.eventLocation = prev.eventLocation;
+        render(); // re-render so the inputs show the rolled-back (last-saved) values
+      }
     };
     document.getElementById('addDept').onclick = async ()=>{
       syncBasicInputsToState();
@@ -2522,15 +2560,15 @@
             <input type="text" id="e_reason" value="${esc(entry.statusReason||'')}" placeholder="請輸入原因">
           </div>
           <label>眷屬人數（不含本人）</label>
-          <input type="number" id="e_famcount" value="${efamCount}" min="0">
+          <select id="e_famcount">${Array.from({length:11},(_,i)=>`<option value="${i}"${i===efamCount?' selected':''}>${i}</option>`).join('')}</select>
           <div class="row meatveg">
             <div>
               <label>葷食人數</label>
-              <input type="number" id="e_meat" min="0" value="${mv.meat}">
+              <select id="e_meat"></select>
             </div>
             <div>
               <label>素食人數</label>
-              <input type="number" id="e_veg" min="0" value="${mv.veg}">
+              <select id="e_veg"></select>
             </div>
           </div>
           <div id="e_famnamesWrap" style="display:${(parseInt(efamCount)||0)>0?'block':'none'};margin-top:8px;">
@@ -2555,6 +2593,9 @@
     const eStatusEl = document.getElementById('e_status');
     const eReasonWrap = document.getElementById('e_reasonWrap');
     let eLastEditedField = null;
+    function ePopulateMeatVegOpts(selEl, count){
+      selEl.innerHTML = Array.from({length:count+1},(_,i)=>`<option value="${i}">${i}</option>`).join('');
+    }
     function eGetTotal(){ return Math.max(1, 1 + (parseInt(eFamCountEl.value)||0)); }
     function eClampInt(v, min, max){
       const n = parseInt(v, 10);
@@ -2567,21 +2608,35 @@
       if(changedField === 'meat'){
         const meat = eClampInt(eMeatEl.value, 0, total);
         eMeatEl.value = meat;
+        ePopulateMeatVegOpts(eVegEl, total - meat);
         eVegEl.value = total - meat;
       }else{ // 'veg'
         const veg = eClampInt(eVegEl.value, 0, total);
         eVegEl.value = veg;
+        ePopulateMeatVegOpts(eMeatEl, total - veg);
         eMeatEl.value = total - veg;
       }
     }
-    eMeatEl.addEventListener('input', ()=>{ eLastEditedField = 'meat'; eRelegalizeMeatVeg('meat'); });
-    eVegEl.addEventListener('input', ()=>{ eLastEditedField = 'veg'; eRelegalizeMeatVeg('veg'); });
-    eFamCountEl.addEventListener('input', ()=>{
+    // Seed selects with initial dynamic options then set values from existing entry
+    // (clamped so legacy/inconsistent values still match an option instead of going blank)
+    const eTotal0 = eGetTotal();
+    ePopulateMeatVegOpts(eMeatEl, eTotal0);
+    ePopulateMeatVegOpts(eVegEl, eTotal0);
+    eMeatEl.value = Math.min(eTotal0, Math.max(0, mv.meat));
+    eVegEl.value = Math.min(eTotal0, Math.max(0, mv.veg));
+    eMeatEl.addEventListener('change', ()=>{ eLastEditedField = 'meat'; eRelegalizeMeatVeg('meat'); });
+    eVegEl.addEventListener('change', ()=>{ eLastEditedField = 'veg'; eRelegalizeMeatVeg('veg'); });
+    eFamCountEl.addEventListener('change', ()=>{
       document.getElementById('e_famnamesWrap').style.display = (parseInt(eFamCountEl.value)||0) > 0 ? 'block' : 'none';
-      const total = eGetTotal();
-      eMeatEl.max = total;
-      eVegEl.max = total;
-      if(eLastEditedField) eRelegalizeMeatVeg(eLastEditedField);
+      if(eLastEditedField){
+        eRelegalizeMeatVeg(eLastEditedField);
+      }else{
+        const total = eGetTotal();
+        ePopulateMeatVegOpts(eMeatEl, total);
+        ePopulateMeatVegOpts(eVegEl, total);
+        eMeatEl.value = total;
+        eVegEl.value = 0;
+      }
     });
     eStatusEl.addEventListener('change', ()=>{
       eReasonWrap.style.display = eStatusEl.value === '其他' ? 'block' : 'none';
