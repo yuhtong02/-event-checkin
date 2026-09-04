@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>中秋晚宴報名</title>
-<meta property="og:title" content="中秋晚宴報名">
+<meta property="og:title" content="中秋晚宴活動報名">
 <meta property="og:description" content="鈺通營造公司活動線上報名，請點擊連結填寫您的出席資料，資料將直接送達人事部門處理，如有問題請洽人事。">
 <meta property="og:type" content="website">
 <meta name="description" content="鈺通營造公司活動線上報名，請點擊連結填寫您的出席資料，資料將直接送達人事部門處理，如有問題請洽人事。">
@@ -99,6 +99,16 @@
   .table-index-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 16px;
                      margin-top:18px;padding-top:14px;border-top:2px solid var(--line);}
   .ti-item{font-size:12.5px;font-weight:700;color:var(--plum-dark);}
+  .table-roster-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;
+                      margin-top:14px;}
+  .tr-item{background:#FBF5F8;border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
+  .tr-head{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;font-weight:800;
+           color:var(--plum-dark);margin-bottom:6px;border-bottom:1px dashed var(--line);padding-bottom:4px;}
+  .tr-cap{font-size:12px;font-weight:700;color:var(--plum);white-space:nowrap;}
+  .tr-guest{font-size:12.5px;color:var(--ink);padding:2px 0;}
+  .tr-fam{font-size:11px;color:var(--ink-soft);padding-left:10px;}
+  .tr-names.empty{color:#C9B7C2;font-style:italic;font-size:12px;}
+  .roster-poster-title{font-size:17px;font-weight:800;color:var(--plum);margin-top:8px;text-align:center;}
   .landmark-del{cursor:pointer;color:var(--red);font-weight:800;margin-left:6px;}
   table.list{width:100%;border-collapse:collapse;font-size:13px;}
   table.list th{background:#F5EBF1;color:var(--plum-dark);text-align:left;padding:8px 8px;font-size:12px;position:sticky;top:0;}
@@ -1047,6 +1057,47 @@
 
   // ---------- seating tab ----------
   let seatingModalTable = null;
+  // Builds a completely separate, standalone "poster" of who's at each table — its own image,
+  // not merged into the seating-layout poster. Only shows currently-attending (出席) people;
+  // 請假/留守 never appear here even though their entry.table value is still preserved elsewhere.
+  // Headcount uses the existing tableOccupancy()/personTotal() — never entries.length — so
+  // meat/veg-split families count correctly, same as everywhere else in the system.
+  function buildRosterPosterHtml(s){
+    const byTable = {};
+    currentEntries().forEach(e=>{
+      if(e.status !== '出席') return; // 請假/留守 never show up on this list
+      if(!e.table) return;
+      const key = String(e.table);
+      if(!byTable[key]) byTable[key] = [];
+      byTable[key].push(e);
+    });
+    const cardsHtml = s.tables.map(t=>{
+      const guests = byTable[String(t.no)] || [];
+      const occ = tableOccupancy(t.no); // already 出席-only, via personTotal()
+      const namesHtml = guests.length
+        ? guests.map(g=>{
+            const famLine = g.famNames ? `<div class="tr-fam">攜眷：${esc(g.famNames)}</div>` : '';
+            return `<div class="tr-guest">${esc(g.name)}${famLine}</div>`;
+          }).join('')
+        : `<div class="tr-names empty">尚未安排人員</div>`;
+      return `<div class="tr-item">
+        <div class="tr-head"><span>${esc(t.no)}桌${t.name?('｜'+esc(t.name)):''}</span><span class="tr-cap">${occ} / ${esc(t.capacity)}</span></div>
+        ${namesHtml}
+      </div>`;
+    }).join('');
+    return `
+      <div class="poster" id="rosterPosterCapture" style="position:absolute;left:-9999px;top:0;width:820px;">
+        <div class="poster-head">
+          <div class="pname">${esc(s.eventName)}</div>
+          <div class="pmeta">${esc(s.eventDate)}　${esc(s.eventTime)}　${esc(s.eventLocation)}</div>
+          <div class="roster-poster-title">桌次人員名單</div>
+        </div>
+        <div class="table-roster-list">
+          ${cardsHtml}
+        </div>
+      </div>`;
+  }
+
   function renderSeating(c){
     const tables = state.settings.tables;
     const s = state.settings;
@@ -1060,9 +1111,10 @@
         <h2>座位總覽（點選桌次查看名單；下方可匯出圖片分享到群組）
           <span class="small" style="float:right;">${isCustom?'自訂版面':'自動排列'}（可到「後台管理→座位版面」調整）</span>
         </h2>
-        <div style="margin-bottom:12px;">
-          <button class="btn btn-primary" id="exportImgBtn">📷 匯出座位圖圖片</button>
-          <span class="small" id="exportStatus" style="margin-left:10px;"></span>
+        <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-primary" id="exportImgBtn">📷 下載座位配置圖</button>
+          <button class="btn btn-primary" id="exportRosterImgBtn">📋 下載桌次人員名單圖</button>
+          <span class="small" id="exportStatus"></span>
         </div>
         <div class="poster" id="posterCapture">
           <div class="poster-head">
@@ -1082,6 +1134,7 @@
             }).join('')}
           </div>
         </div>
+        ${buildRosterPosterHtml(s)}
       </div>
       <div id="modalHost"></div>
     `;
@@ -1092,6 +1145,7 @@
       fitScaleToWrapper(document.getElementById('fpRoomEl'), document.getElementById('floorWrap'), 760);
     }
     document.getElementById('exportImgBtn').onclick = ()=> exportSeatingImage();
+    document.getElementById('exportRosterImgBtn').onclick = ()=> exportRosterImage();
   }
 
   function tableCircleHtml(t, extraStyle, highlightNo){
@@ -1130,18 +1184,41 @@
 
   function renderFreeformFloor(tables, highlightNo){
     const landmarks = state.settings.landmarks || [];
+    // All existing x/y percentages (both default positions and anything already dragged in the
+    // editor) were placed assuming a 1560px-tall canvas — that reference frame is what gives them
+    // their spacing. To display a canvas that's only as tall as the content actually needs (instead
+    // of always reserving the full 1560px even for a handful of tables), we convert each element's
+    // percentage into an absolute pixel offset against that SAME fixed reference, then size the
+    // container to just contain the deepest element — this shrinks/grows the empty canvas space
+    // without changing anything about the editor, the drag math, or the stored x/y values.
+    const REF_HEIGHT = 1560;
+    const MIN_HEIGHT = 480; // floor, so a handful of tables doesn't look absurdly cramped
+    const BOTTOM_PAD = 60;
+    let maxBottomPx = 0;
+    tables.forEach(t=>{
+      const y = t.y!=null ? t.y : 50;
+      const halfH = (t.name==='主桌' ? 130 : 118) / 2;
+      maxBottomPx = Math.max(maxBottomPx, (y/100)*REF_HEIGHT + halfH);
+    });
+    landmarks.forEach(lm=>{
+      const y = lm.y!=null ? lm.y : 50;
+      const halfH = (lm.type==='pillar' ? 22 : 34) / 2;
+      maxBottomPx = Math.max(maxBottomPx, (y/100)*REF_HEIGHT + halfH);
+    });
+    const neededHeight = Math.round(Math.max(MIN_HEIGHT, maxBottomPx + BOTTOM_PAD));
+    const px = pct => Math.round((pct/100)*REF_HEIGHT);
     return `
-      <div class="fp-room" id="fpRoomEl" style="position:relative;height:1560px;width:760px;margin:0 auto;padding:0 0 60px;">
+      <div class="fp-room" id="fpRoomEl" style="position:relative;height:${neededHeight}px;width:760px;margin:0 auto;padding:0 0 60px;">
         ${tables.map(t=>{
           const x = t.x!=null?t.x:50, y = t.y!=null?t.y:50;
-          return tableCircleHtml(t, `position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);`, highlightNo);
+          return tableCircleHtml(t, `position:absolute;left:${x}%;top:${px(y)}px;transform:translate(-50%,-50%);`, highlightNo);
         }).join('')}
         ${landmarks.map(lm=>{
           const x = lm.x!=null?lm.x:50, y = lm.y!=null?lm.y:50;
           if(lm.type==='pillar'){
-            return `<div class="pillar-mark" style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);"></div>`;
+            return `<div class="pillar-mark" style="position:absolute;left:${x}%;top:${px(y)}px;transform:translate(-50%,-50%);"></div>`;
           }
-          return `<div class="landmark-pill" style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);">${esc(lm.label)}</div>`;
+          return `<div class="landmark-pill" style="position:absolute;left:${x}%;top:${px(y)}px;transform:translate(-50%,-50%);">${esc(lm.label)}</div>`;
         }).join('')}
       </div>`;
   }
@@ -1343,6 +1420,43 @@
       if(prevWrapHeight!=null) floorWrap.style.height = prevWrapHeight;
       if(prevWrapOverflow!=null) floorWrap.style.overflow = prevWrapOverflow;
       if(prevWrapWidth!=null) floorWrap.style.width = prevWrapWidth;
+    }
+  }
+
+  // Second, independent export — the table-roster poster (#rosterPosterCapture) is a completely
+  // separate DOM element from the seating-layout poster, so this produces its own image with its
+  // own filename, entirely decoupled from exportSeatingImage() above.
+  async function exportRosterImage(){
+    const statusEl = document.getElementById('exportStatus');
+    const target = document.getElementById('rosterPosterCapture');
+    if(!target) return;
+    statusEl.textContent = '準備圖片工具中...';
+    const loaded = await ensureHtml2Canvas();
+    if(!loaded || typeof html2canvas === 'undefined'){
+      statusEl.textContent = '圖片工具載入失敗，請檢查網路後重新整理再試';
+      return;
+    }
+    statusEl.textContent = '產生圖片中...';
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    try{
+      const fullWidth = Math.max(target.scrollWidth, target.offsetWidth);
+      const fullHeight = Math.max(target.scrollHeight, target.offsetHeight);
+      const canvas = await html2canvas(target, {
+        backgroundColor:'#FBF5F8', scale:2,
+        width: fullWidth, height: fullHeight,
+        windowWidth: fullWidth, windowHeight: fullHeight,
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const fname = (state.settings.eventName||'活動').replace(/[\\/:*?"<>|]/g,'') + '_桌次人員名單.png';
+      const link = document.createElement('a');
+      link.download = fname;
+      link.href = dataUrl;
+      link.click();
+      showExportedImageModal(dataUrl);
+      statusEl.textContent = '已產生桌次人員名單圖，手機請長按下方圖片存檔；電腦應該已自動下載';
+    }catch(e){
+      console.error(e);
+      statusEl.textContent = '產生圖片失敗，請再試一次';
     }
   }
 
@@ -2313,13 +2427,13 @@
                 <td>${mv.meat||''}</td>
                 <td>${mv.veg||''}</td>
                 <td>${esc(e.famNames||'')}</td>
-                <td><select data-field="table" style="width:110px;">
+                <td>${e.status==='出席' ? `<select data-field="table" style="width:110px;">
                   <option value="">未排</option>
                   ${s.tables.map(t=>{
                     const occ = tableOccupancy(t.no);
                     return `<option value="${esc(t.no)}" ${String(e.table)===String(t.no)?'selected':''}>${esc(t.no)}桌 (${occ}/${esc(t.capacity)})</option>`;
                   }).join('')}
-                </select></td>
+                </select>` : `<span class="small" style="color:#C9B7C2;">— 不需排桌</span>`}</td>
                 <td>${esc(e.note||'')}</td>
                 <td style="white-space:nowrap;">
                   <button class="btn btn-ghost btn-sm" data-edit-entry="${e.id}">編輯</button>
