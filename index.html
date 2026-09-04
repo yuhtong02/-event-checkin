@@ -197,10 +197,9 @@
     .r-table{min-width:64px;padding:6px 12px;}
     .r-table .n{font-size:18px;}
     .badge{font-size:10px;padding:2px 6px;}
-    .admin-dates{flex-direction:column;gap:8px;}
-    .admin-dates>div{flex:none;width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
-    /* compact date inputs — 16px font prevents iOS auto-zoom; reduced padding shrinks visual height */
-    .admin-dates [type=date]{width:100%;max-width:100%;min-width:0;box-sizing:border-box;height:auto;padding:6px 10px;font-size:16px;}
+    .admin-dates{display:flex;flex-direction:column;gap:10px;}
+    .admin-dates>div{width:100%;min-width:0;}
+    .admin-dates input[type="date"]{display:block;width:100%;max-width:100%;min-width:0;height:40px;min-height:40px;max-height:40px;padding:0 10px;margin:0;box-sizing:border-box;font-size:16px;line-height:40px;}
     select{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
   }
 </style>
@@ -451,9 +450,8 @@
       render();
       return;
     }
-    // kick off the entries load now, in parallel with settings — the two round trips overlap
-    // instead of running one after another, so the page is ready sooner.
-    const entriesPromise = withTimeout(loadEntries(), 8000);
+    // Only load settings here — entries are loaded lazily when a tab that needs them
+    // is activated (报到 / 座位 / 后台), keeping the initial API call count to 1.
     try{
       let s = await withTimeout(loadSettings(), 8000);
       if(!s){
@@ -470,12 +468,7 @@
       }
       state.settings = s;
       state.settingsLoaded = true;
-      render(); // show the form as soon as settings are confirmed — don't also wait on entries
-      state.entries = await entriesPromise || [];
-      // refresh data-driven tabs if the user already navigated to one, but skip the register
-      // form — it doesn't depend on entries, and re-rendering right after load could steal
-      // keyboard focus while someone is already typing on mobile.
-      if(state.tab !== 'register') render();
+      render(); // show the form as soon as settings are confirmed
     }catch(e){
       console.error('init failed', e);
       state.storageWarning = true;
