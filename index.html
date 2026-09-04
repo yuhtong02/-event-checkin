@@ -199,6 +199,8 @@
     .badge{font-size:10px;padding:2px 6px;}
     .admin-dates{flex-direction:column;gap:8px;}
     .admin-dates>div{flex:none;width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
+    /* compact date inputs — 16px font prevents iOS auto-zoom; reduced padding shrinks visual height */
+    .admin-dates [type=date]{width:100%;max-width:100%;min-width:0;box-sizing:border-box;height:auto;padding:6px 10px;font-size:16px;}
     select{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}
   }
 </style>
@@ -1740,15 +1742,28 @@
       return;
     }
     statusEl.textContent = '產生圖片中...';
-    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     try{
-      // Roster height is driven by the ACTUAL rendered content box (getBoundingClientRect),
-      // not the seating poster's logic — so it stays tight to the cards with just a small
-      // bottom margin, and grows naturally for 15/25/45+ tables. (rect.width/height are
-      // correct for off-screen absolute elements; they don't depend on left:-9999px.)
+      // Move the roster poster into a temporary wrapper to isolate it from viewport-dependent
+      // styles (content padding, min-height, 100vh, etc.) that can inflate the html2canvas
+      // measurement and produce blank space at the bottom of the PNG.
+      const parentBefore = target.parentNode;
+      const wrapper = document.createElement('div');
+      wrapper.id = 'rosterExportWrap';
+      wrapper.style.cssText = 'position:absolute;left:-9999px;top:0;width:820px;overflow:visible;';
+      parentBefore.insertBefore(wrapper, target);
+      wrapper.appendChild(target);
+      // Ensure a clean, height-free rendering context for the capture
+      target.style.position = '';
+      target.style.left = '';
+      target.style.top = '';
+      target.style.transform = '';
+      target.style.maxWidth = 'none';
+      target.style.width = '820px';
+      await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+      // Measure the actual content height from the clean wrapper (no viewport artifacts)
       const rect = target.getBoundingClientRect();
       const fullWidth = Math.ceil(rect.width);
-      const fullHeight = Math.ceil(rect.height) + 24; // reasonable 留白, not a giant empty area
+      const fullHeight = Math.ceil(rect.height);
       const canvas = await html2canvas(target, {
         backgroundColor:'#FBF5F8', scale:2,
         width: fullWidth, height: fullHeight,
@@ -1765,6 +1780,19 @@
     }catch(e){
       console.error(e);
       statusEl.textContent = '產生圖片失敗，請再試一次';
+    }finally{
+      // Restore the roster poster to its original location and clean up
+      const w = document.getElementById('rosterExportWrap');
+      if(w && target.parentNode === w){
+        target.style.position = 'absolute';
+        target.style.left = '-9999px';
+        target.style.top = '0';
+        target.style.width = '820px';
+        target.style.maxWidth = '';
+        target.style.transform = '';
+        w.parentNode.insertBefore(target, w);
+        w.remove();
+      }
     }
   }
 
